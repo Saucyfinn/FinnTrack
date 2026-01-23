@@ -1,34 +1,32 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>FinnTrack</title>
-    <link rel="stylesheet" href="/css/style.css">
-</head>
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Hello, World!</title>
+	</head>
+	<body>
+		<h1 id="heading"></h1>
+		<p>This page comes from a static asset stored at `public/index.html` as configured in `wrangler.jsonc`.</p>
+		<button id="button" type="button">Fetch a random UUID</button>
+		<output id="random" for="button"></output>
+		<script>
+			fetch('/message')
+				.then((resp) => resp.text())
+				.then((text) => {
+					const h1 = document.getElementById('heading');
+					h1.textContent = text;
+				});
 
-<body>
-
-<header>
-    <img src="/assets/logo.svg" id="logo">
-    <nav>
-        <a href="/live.html">Live</a>
-        <a href="/replay.html">Replay</a>
-        <a href="/analytics.html">Analytics</a>
-    </nav>
-</header>
-
-<main class="center">
-    <h1>FinnTrack</h1>
-    <p>Live tracking and replay for Finn sailing races.</p>
-
-    <div class="home-buttons">
-        <a class="btn" href="/live.html">Live Tracking</a>
-        <a class="btn" href="/replay.html">Race Replay</a>
-        <a class="btn" href="/analytics.html">Analytics Dashboard</a>
-    </div>
-</main>
-
-<footer>FinnTrack — Powered by Cloudflare & MapLibre</footer>
-
-</body>
+			const button = document.getElementById("button");
+			button.addEventListener("click", () => {
+				fetch('/random')
+					.then((resp) => resp.text())
+					.then((text) => {
+						const random = document.getElementById('random');
+						random.textContent = text;
+					});
+			});
+		</script>
+	</body>
 </html>

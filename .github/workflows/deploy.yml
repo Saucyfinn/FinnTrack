@@ -1,0 +1,30 @@
+name: Deploy FinnTrack API Worker
+
+on:
+  push:
+    branches:
+      - api-worker
+
+jobs:
+  deploy:
+    name: Publish to Cloudflare Workers
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      deployments: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install Wrangler
+        run: npm install -g wrangler
+
+      - name: Publish Worker
+        run: wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+

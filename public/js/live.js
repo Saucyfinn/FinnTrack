@@ -12,12 +12,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     // State
     let reconnectTimer = null;
     let selectedBoat = null;
+    let followingBoat = null;
+    let fleetData = null;
 
     // DOM elements
     const raceSelect = document.getElementById("raceSelect");
     const loadRaceBtn = document.getElementById("loadRaceBtn");
     const boatList = document.getElementById("boatList");
     const connectionStatus = document.getElementById("connectionStatus");
+    const boatSelect = document.getElementById("boatSelect");
+    const followBoatBtn = document.getElementById("followBoatBtn");
+    const resetViewBtn = document.getElementById("resetViewBtn");
 
     // Toggle elements
     const toggleLabels = document.getElementById("toggleLabels");
@@ -32,6 +37,67 @@ document.addEventListener("DOMContentLoaded", async () => {
     const exportGPX = document.getElementById("exportGPX");
     const exportKML = document.getElementById("exportKML");
     const exportJSON = document.getElementById("exportJSON");
+
+    // Load fleet data for boat dropdown
+    async function loadFleetData() {
+        try {
+            const res = await fetch("/data/fleet.json");
+            if (!res.ok) return;
+            fleetData = await res.json();
+            populateBoatSelect();
+        } catch (err) {
+            console.log("Fleet data not available");
+        }
+    }
+
+    // Populate boat dropdown from fleet data
+    function populateBoatSelect() {
+        if (!fleetData || !boatSelect) return;
+
+        boatSelect.innerHTML = '<option value="">-- All boats --</option>';
+
+        const entries = fleetData.entries || [];
+        entries.forEach(entry => {
+            const opt = document.createElement("option");
+            opt.value = entry.sailNumber;
+            opt.textContent = `${entry.sailNumber} - ${entry.skipper}`;
+            boatSelect.appendChild(opt);
+        });
+    }
+
+    // Update boat dropdown when boats appear on map
+    function updateBoatSelectFromLive(boatIds) {
+        if (!boatSelect) return;
+
+        // Add any boats that aren't in fleet data
+        const existingOptions = new Set(Array.from(boatSelect.options).map(o => o.value));
+
+        boatIds.forEach(boatId => {
+            if (!existingOptions.has(boatId)) {
+                const opt = document.createElement("option");
+                opt.value = boatId;
+                opt.textContent = boatId;
+                boatSelect.appendChild(opt);
+            }
+        });
+    }
+
+    // Follow selected boat (auto-center on updates)
+    function startFollowing(boatId) {
+        followingBoat = boatId;
+        if (boatId) {
+            FinnTrackMap.focusBoat(boatId, 16);
+            FinnTrackMap.highlightBoat(boatId);
+            if (followBoatBtn) followBoatBtn.textContent = "Following...";
+        }
+    }
+
+    // Stop following
+    function stopFollowing() {
+        followingBoat = null;
+        FinnTrackMap.resetHighlight();
+        if (followBoatBtn) followBoatBtn.textContent = "Follow";
+    }
 
     // Load race list
     async function populateRaceList() {
@@ -94,6 +160,13 @@ document.addEventListener("DOMContentLoaded", async () => {
                 });
             }
             renderBoatList(Object.keys(boats));
+            updateBoatSelectFromLive(Object.keys(boats));
+
+            // Re-focus on followed boat if set
+            if (followingBoat && boats[followingBoat]) {
+                FinnTrackMap.focusBoat(followingBoat, 16);
+                FinnTrackMap.highlightBoat(followingBoat);
+            }
         }
 
         if (msg.type === "update") {
@@ -108,6 +181,11 @@ document.addEventListener("DOMContentLoaded", async () => {
                 }
             });
 
+            // Auto-center on followed boat
+            if (followingBoat === msg.boat) {
+                FinnTrackMap.focusBoat(msg.boat, 16);
+            }
+
             // Add to boat list if new
             if (!boatList.querySelector(`[data-boat="${msg.boat}"]`)) {
                 const li = document.createElement("li");
@@ -120,6 +198,7 @@ document.addEventListener("DOMContentLoaded", async () => {
                     FinnTrackMap.highlightBoat(msg.boat);
                 };
                 boatList.appendChild(li);
+                updateBoatSelectFromLive([msg.boat]);
             }
         }
     }
@@ -163,6 +242,37 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Event listeners
     loadRaceBtn.addEventListener("click", loadRace);
 
+    // Follow boat controls
+    if (followBoatBtn) {
+        followBoatBtn.addEventListener("click", () => {
+            const boatId = boatSelect ? boatSelect.value : null;
+            if (boatId) {
+                startFollowing(boatId);
+            }
+        });
+    }
+
+    if (resetViewBtn) {
+        resetViewBtn.addEventListener("click", () => {
+            stopFollowing();
+            if (boatSelect) boatSelect.value = "";
+            FinnTrackMap.fitToBounds();
+        });
+    }
+
+    if (boatSelect) {
+        boatSelect.addEventListener("change", () => {
+            const boatId = boatSelect.value;
+            if (boatId) {
+                selectedBoat = boatId;
+                FinnTrackMap.focusBoat(boatId, 15);
+                FinnTrackMap.highlightBoat(boatId);
+            } else {
+                stopFollowing();
+            }
+        });
+    }
+
     // Layer toggles
     if (toggleLabels) toggleLabels.addEventListener("change", e => FinnTrackMap.setLabelsVisible(e.target.checked));
     if (toggleVectors) toggleVectors.addEventListener("change", e => FinnTrackMap.setVectorsVisible(e.target.checked));
@@ -189,6 +299,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
 
     // Initial load
+    await loadFleetData();
     await populateRaceList();
     await loadRace();
 });

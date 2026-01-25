@@ -115,10 +115,15 @@
       <option value="">Loading races...</option>
     </select>
 
+    <label for="entrySelect">Select Your Entry</label>
+    <select id="entrySelect">
+      <option value="">-- Select from fleet or enter manually --</option>
+    </select>
+
     <label for="boatId">Boat ID / Sail Number</label>
     <input type="text" id="boatId" placeholder="e.g. AUS 123" required>
 
-    <label for="boatName">Name (optional)</label>
+    <label for="boatName">Skipper Name</label>
     <input type="text" id="boatName" placeholder="e.g. John Smith">
 
     <button class="btn btn-start" id="startBtn">Start Tracking</button>
@@ -156,6 +161,7 @@
 
       // Elements
       const raceSelect = document.getElementById("raceSelect");
+      const entrySelect = document.getElementById("entrySelect");
       const boatIdInput = document.getElementById("boatId");
       const boatNameInput = document.getElementById("boatName");
       const startBtn = document.getElementById("startBtn");
@@ -175,6 +181,45 @@
       let sendInterval = null;
 
       const SEND_INTERVAL_MS = 2000; // Send every 2 seconds
+
+      // Fetch and populate fleet entries
+      async function loadFleetEntries() {
+        try {
+          const res = await fetch("/data/fleet.json");
+          if (!res.ok) throw new Error("Failed to load fleet");
+          const data = await res.json();
+          const entries = data.entries || [];
+
+          entrySelect.innerHTML = '<option value="">-- Select from fleet or enter manually --</option>';
+
+          entries.forEach((entry, idx) => {
+            const opt = document.createElement("option");
+            opt.value = idx;
+            opt.textContent = `${entry.sailNumber} - ${entry.skipper}`;
+            opt.dataset.sailNumber = entry.sailNumber;
+            opt.dataset.skipper = entry.skipper;
+            entrySelect.appendChild(opt);
+          });
+
+          // Store entries for selection
+          entrySelect.fleetData = entries;
+        } catch (err) {
+          console.log("Fleet data not available, using manual entry only");
+        }
+      }
+
+      // Handle entry selection
+      entrySelect.addEventListener("change", () => {
+        const idx = entrySelect.value;
+        if (idx !== "" && entrySelect.fleetData) {
+          const entry = entrySelect.fleetData[idx];
+          boatIdInput.value = entry.sailNumber;
+          boatNameInput.value = entry.skipper;
+          // Save to localStorage
+          localStorage.setItem("finntrack_boatId", entry.sailNumber);
+          localStorage.setItem("finntrack_boatName", entry.skipper);
+        }
+      });
 
       // Fetch and populate races
       async function loadRaces() {
@@ -417,6 +462,7 @@
       });
 
       // Initialize
+      loadFleetEntries();
       loadRaces();
     })();
   </script>

@@ -1,43 +1,60 @@
-/**
- * For more details on how to configure Wrangler, refer to:
- * https://developers.cloudflare.com/workers/wrangler/configuration/
- */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "finntrack-api-worker",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-09-27",
-	"compatibility_flags": [
-		"global_fetch_strictly_public"
+	/* ----------------------------------------------------------
+   * D1 DATABASE (track_points table lives here)
+   * ---------------------------------------------------------- */
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "finntracker-db",
+			"database_id": "308ad841-219b-4e02-89f0-c326974723e6"
+		}
 	],
-	"assets": {
-		// The path to the directory containing the `index.html` file to be served at `/`
-		"directory": "./public"
+	/* ----------------------------------------------------------
+   * R2 BUCKET (optimized replay files)
+   * ---------------------------------------------------------- */
+	"r2_buckets": [
+		{
+			"binding": "RACES",
+			"bucket_name": "finntracker-replay"
+		}
+	],
+	/* ----------------------------------------------------------
+   * KV NAMESPACE (store joining boats, race lists, etc.)
+   * ---------------------------------------------------------- */
+	"kv_namespaces": [
+		{
+			"binding": "HISTORY",
+			"id": "191134472c4e49ea8605d58ada9e21b6"
+		},
+		{
+			"binding": "HISTORY_PREVIEW",
+			"id": "04b2e8128c294fbbbb16771527021218"
+		}
+	],
+	/* ----------------------------------------------------------
+   * DURABLE OBJECTS (live boat state in memory)
+   * ---------------------------------------------------------- */
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "RACE_STATE",
+				"class_name": "RaceState"
+			}
+		]
 	},
-	"observability": {
-		"enabled": true
-	}
-	/**
-	 * Smart Placement
-	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
-	 */
-	// "placement": {  "mode": "smart" }
-	/**
-	 * Bindings
-	 * Bindings allow your Worker to interact with resources on the Cloudflare Developer Platform, including
-	 * databases, object storage, AI inference, real-time communication and more.
-	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
-	 */
-	/**
-	 * Environment Variables
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
-	 * Note: Use secrets to store sensitive data.
-	 * https://developers.cloudflare.com/workers/configuration/secrets/
-	 */
-	// "vars": {  "MY_VARIABLE": "production_value" }
-	/**
-	 * Service Bindings (communicate between multiple Workers)
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
-	 */
-	// "services": [  {   "binding": "MY_SERVICE",   "service": "my-service"  } ]
+	/* ----------------------------------------------------------
+   * MIGRATIONS — REQUIRED for Durable Objects to work
+   * ---------------------------------------------------------- */
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": [
+				"RaceState"
+			]
+		}
+	]
 }

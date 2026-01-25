@@ -25,8 +25,8 @@ const FinnTrackMap = (function() {
     let showVectors = true;
     let showTrails = true;
 
-    // Initialize map
-    function initMap(elementId, center = [-41.2, 173.0], zoom = 11) {
+    // Initialize map (default: Royal Queensland Yacht Squadron, Manly, Brisbane)
+    function initMap(elementId, center = [-27.458, 153.185], zoom = 14) {
         map = L.map(elementId, { zoomControl: true, preferCanvas: true }).setView(center, zoom);
 
         // Light theme tiles (OSM)

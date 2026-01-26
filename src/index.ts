@@ -3,6 +3,7 @@
  * Endpoints:
  *   GET  /health
  *   GET  /version
+ *   GET  /race/list            (list available races)
  *   POST /track               (accepts single point OR boats[] batch)
  *   GET  /replay?raceId=...&from=...&to=...&hz=...
  *   GET  /live?raceId=...     (WebSocket; use ws(s):// in client)
@@ -199,8 +200,27 @@ export default {
       return json({
         ok: true,
         service: "finntrack-api-worker",
-        build: "2026-01-26-b", // change this string each deploy
+        build: "2026-01-26-c", // change this string each deploy
       });
+    }
+
+    // List available races
+    if (url.pathname === "/race/list" && req.method === "GET") {
+      const res = await env.DB.prepare(
+        `SELECT raceId, MIN(t) as startTime, MAX(t) as endTime, COUNT(*) as pointCount
+         FROM track_points
+         GROUP BY raceId
+         ORDER BY MAX(t) DESC`
+      ).all<any>();
+
+      const races = (res.results || []).map((r: any) => ({
+        raceId: r.raceId,
+        startTime: r.startTime,
+        endTime: r.endTime,
+        pointCount: r.pointCount,
+      }));
+
+      return json({ ok: true, races });
     }
 
     if (url.pathname === "/replay" && req.method === "GET") {

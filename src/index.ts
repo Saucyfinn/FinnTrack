@@ -172,6 +172,12 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
+    if (request.method === "GET" && url.pathname === "/") {
+      return new Response("FinnTrack API Worker OK. Try /health", {
+       headers: { "content-type": "text/plain; charset=utf-8" },
+  });
+}
+
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders() });
     }

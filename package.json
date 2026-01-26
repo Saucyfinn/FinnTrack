@@ -4,13 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
     "build": "tsc -p tsconfig.json",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250821.0",
-    "typescript": "^5.5.4",
-    "wrangler": "^4.60.0"
+    "typescript": "^5.0.0",
+    "wrangler": "^3.0.0"
   }
 }

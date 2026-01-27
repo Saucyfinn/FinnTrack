@@ -6,6 +6,11 @@ type Env = {
   RACE_STATE: DurableObjectNamespace;
   HISTORY: KVNamespace;
   RACES: R2Bucket;
+  DB: D1Database;
+
+  // Optional shared key for OwnTracks ingest.
+  // If set, requests must include ?key=... matching this value.
+  OWNTRACKS_KEY?: string;
 };
 
 const CORS_HEADERS: Record<string, string> = {
@@ -34,28 +39,83 @@ function stubForRace(env: Env, raceId: string) {
   return env.RACE_STATE.get(id);
 }
 
-// Pretty, manual races for dropdown.
-// (This does NOT create data; it just offers IDs + labels the UI can load.)
-function listRacesPretty() {
-  const mk = (series: string, year: number, count: number, prefix: string) =>
+// Predefined race series for 2026
+function listPredefinedRaces() {
+  const mk = (series: string, prefix: string, count: number) =>
     Array.from({ length: count }, (_, i) => {
       const n = i + 1;
       return {
-        raceId: `${prefix}-${year}-R${String(n).padStart(2, "0")}`,
-        title: `${series} ${year} — Race ${n}`,
+        raceId: `${prefix}-2026-R${String(n).padStart(2, "0")}`,
+        title: `${series} - Race ${n}`,
         series,
-        year,
         raceNo: n,
       };
     });
 
-  const ausNats = mk("Australian Finn Nationals", 2026, 6, "AUSNATS");
-  const goldCup = mk("Finn Gold Cup", 2026, 10, "GOLDCUP");
-  const masters = mk("Finn World Masters", 2026, 8, "MASTERS");
-  const undefinedRaces = mk("Undefined Race", 2026, 10, "UNDEF");
+  const ausNats = mk("Australian Nationals 2026", "AUSNATS", 6);
+  const goldCup = mk("Gold Cup 2026", "GOLDCUP", 10);
+  const masters = mk("Finn World Masters 2026", "MASTERS", 8);
+  const training = mk("Training/Undefined", "TRAINING", 10);
 
-  const races = [...ausNats, ...goldCup, ...masters, ...undefinedRaces];
-  return { races };
+  return {
+    races: [...ausNats, ...goldCup, ...masters, ...training],
+    series: [
+      { id: "AUSNATS", name: "Australian Nationals 2026", raceCount: 6 },
+      { id: "GOLDCUP", name: "Gold Cup 2026", raceCount: 10 },
+      { id: "MASTERS", name: "Finn World Masters 2026", raceCount: 8 },
+      { id: "TRAINING", name: "Training/Undefined", raceCount: 10 },
+    ],
+  };
+}
+
+/**
+ * Map OwnTracks HTTP payload -> FinnTrack update payload.
+ * We keep it tolerant because OwnTracks fields vary slightly.
+ */
+function ownTracksToUpdatePayload(
+  url: URL,
+  body: any
+): { raceId: string; boatId: string; lat: number; lon: number; t: number; sog?: number; cog?: number; name?: string } | null {
+  const raceId = String(url.searchParams.get("raceId") || "").trim();
+  if (!raceId) return null;
+
+  // Prefer boatId passed in query; otherwise fall back to OwnTracks fields.
+  const boatId =
+    String(url.searchParams.get("boatId") || "").trim() ||
+    String(body?.boatId || "").trim() ||
+    String(body?.userid || "").trim() ||
+    String(body?.user || "").trim() ||
+    String(body?.tid || "").trim() ||
+    String(body?.deviceid || "").trim();
+
+  if (!boatId) return null;
+
+  const lat = Number(body?.lat);
+  const lon = Number(body?.lon ?? body?.lng ?? body?.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+
+  // OwnTracks uses tst in *seconds* since epoch.
+  // Some loggers might send ms; we normalize to seconds.
+  let t = Number(body?.tst ?? body?.t ?? Date.now() / 1000);
+  if (!Number.isFinite(t)) t = Math.floor(Date.now() / 1000);
+  if (t > 1e12) t = Math.floor(t / 1000);
+
+  // speed/heading
+  const sog = Number(body?.vel ?? body?.sog ?? body?.speed);
+  const cog = Number(body?.cog ?? body?.heading);
+
+  const name = String(body?.name || url.searchParams.get("name") || "").trim() || undefined;
+
+  return {
+    raceId,
+    boatId,
+    lat,
+    lon,
+    t,
+    ...(Number.isFinite(sog) ? { sog } : {}),
+    ...(Number.isFinite(cog) ? { cog } : {}),
+    ...(name ? { name } : {}),
+  };
 }
 
 export default {
@@ -75,19 +135,74 @@ export default {
       }
     }
 
-    // Static assets from /public are served automatically by the assets binding
-    // No need to handle them here - they're served before the worker runs
-
-    // Pretty race list used by the dropdown
+    // Race list
     if (request.method === "GET" && path === "/race/list") {
-      return withCors(Response.json(listRacesPretty()));
+      return withCors(Response.json(listPredefinedRaces()));
+    }
+
+    // Health
+    if (request.method === "GET" && path === "/health") {
+      return withCors(new Response("ok", { status: 200 }));
+    }
+
+    // --- OwnTracks ingest (NEW) ---
+    // OwnTracks HTTP mode posts JSON. We'll forward it into the Race DO /update.
+    if (path === "/ingest/owntracks") {
+      if (request.method !== "POST") {
+        return withCors(new Response("Method Not Allowed", { status: 405 }));
+      }
+
+      // Optional shared key check (only enforced if OWNTRACKS_KEY is set)
+      if (env.OWNTRACKS_KEY) {
+        const key = url.searchParams.get("key") || "";
+        if (!key || key !== env.OWNTRACKS_KEY) {
+          return withCors(new Response("Unauthorized", { status: 401 }));
+        }
+      }
+
+      let body: any;
+      try {
+        body = await request.json();
+      } catch {
+        return withCors(new Response("Bad JSON", { status: 400 }));
+      }
+
+      // OwnTracks sends several event types; we only accept location-like payloads.
+      const t = String(body?._type || "").toLowerCase();
+      if (t && t !== "location") {
+        // Ignore non-location events but respond 200 so OwnTracks stays happy.
+        return withCors(new Response("ok", { status: 200 }));
+      }
+
+      const updatePayload = ownTracksToUpdatePayload(url, body);
+      if (!updatePayload) {
+        return withCors(new Response("Missing raceId/boatId/lat/lon", { status: 400 }));
+      }
+
+      const raceId = updatePayload.raceId;
+
+      const doUrl = new URL(request.url);
+      doUrl.protocol = "https:";
+      doUrl.host = "do";
+      doUrl.pathname = "/update";
+
+      const fwd = new Request(doUrl.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updatePayload),
+      });
+
+      const resp = await stubForRace(env, raceId).fetch(fwd);
+      // We always return 200-ish if DO accepted; pass through status for debugging
+      return withCors(resp);
     }
 
     // WebSocket live feed for a race (DO handles upgrade)
-    if (path === "/live") {
+    if (path === "/ws/live") {
       const raceId = getRaceIdFromUrl(url);
       if (!raceId) return withCors(new Response("Missing raceId", { status: 400 }));
-      return withCors(await stubForRace(env, raceId).fetch(request));
+      // Don't wrap WebSocket responses in CORS - pass through directly
+      return stubForRace(env, raceId).fetch(request);
     }
 
     // Read-only endpoints served by DO
@@ -101,7 +216,6 @@ export default {
       const raceId = getRaceIdFromUrl(url);
       if (!raceId) return withCors(new Response("Missing raceId", { status: 400 }));
 
-      // Route inside DO while preserving original path/query
       const doUrl = new URL(request.url);
       doUrl.protocol = "https:";
       doUrl.host = "do";
@@ -135,11 +249,6 @@ export default {
       });
 
       return withCors(await stubForRace(env, raceId).fetch(fwd));
-    }
-
-    // Helpful ping
-    if (request.method === "GET" && path === "/health") {
-      return withCors(new Response("ok", { status: 200 }));
     }
 
     return withCors(new Response("Not found", { status: 404 }));

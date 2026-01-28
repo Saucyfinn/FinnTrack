@@ -39,6 +39,15 @@ function stubForRace(env: Env, raceId: string) {
   return env.RACE_STATE.get(id);
 }
 
+function parseBasicAuth(req: Request): { user?: string; pass?: string } {
+  const h = req.headers.get("Authorization");
+  if (!h || !h.startsWith("Basic ")) return {};
+  const raw = atob(h.slice(6));
+  const i = raw.indexOf(":");
+  if (i < 0) return { user: raw };
+  return { user: raw.slice(0, i), pass: raw.slice(i + 1) };
+}
+
 // Predefined race series for 2026
 function listPredefinedRaces() {
   const mk = (series: string, prefix: string, count: number) =>
@@ -70,17 +79,28 @@ function listPredefinedRaces() {
 
 /**
  * Map OwnTracks HTTP payload -> FinnTrack update payload.
- * We keep it tolerant because OwnTracks fields vary slightly.
+ * IMPORTANT: We normalize timestamp to *milliseconds*.
+ * boatId is primarily from Basic Auth username (best), with fallbacks.
  */
 function ownTracksToUpdatePayload(
   url: URL,
-  body: any
-): { raceId: string; boatId: string; lat: number; lon: number; t: number; sog?: number; cog?: number; name?: string } | null {
+  body: any,
+  authBoatId?: string
+): {
+  raceId: string;
+  boatId: string;
+  lat: number;
+  lon: number;
+  t: number; // ms
+  sog?: number;
+  cog?: number;
+  name?: string;
+} | null {
   const raceId = String(url.searchParams.get("raceId") || "").trim();
   if (!raceId) return null;
 
-  // Prefer boatId passed in query; otherwise fall back to OwnTracks fields.
   const boatId =
+    String(authBoatId || "").trim() ||
     String(url.searchParams.get("boatId") || "").trim() ||
     String(body?.boatId || "").trim() ||
     String(body?.userid || "").trim() ||
@@ -94,13 +114,14 @@ function ownTracksToUpdatePayload(
   const lon = Number(body?.lon ?? body?.lng ?? body?.longitude);
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
 
-  // OwnTracks uses tst in *seconds* since epoch.
-  // Some loggers might send ms; we normalize to seconds.
+  // OwnTracks uses tst in *seconds* since epoch; normalize to ms.
   let t = Number(body?.tst ?? body?.t ?? Date.now() / 1000);
   if (!Number.isFinite(t)) t = Math.floor(Date.now() / 1000);
-  if (t > 1e12) t = Math.floor(t / 1000);
 
-  // speed/heading
+  // If seconds, convert to ms. If already ms, keep.
+  if (t < 1e12) t = Math.floor(t * 1000);
+  if (t > 1e15) t = Math.floor(t / 1000);
+
   const sog = Number(body?.vel ?? body?.sog ?? body?.speed);
   const cog = Number(body?.cog ?? body?.heading);
 
@@ -145,8 +166,10 @@ export default {
       return withCors(new Response("ok", { status: 200 }));
     }
 
-    // --- OwnTracks ingest (NEW) ---
-    // OwnTracks HTTP mode posts JSON. We'll forward it into the Race DO /update.
+    // --- OwnTracks ingest ---
+    // Configure OwnTracks HTTP Mode URL:
+    //   https://YOUR_API_DOMAIN/ingest/owntracks?raceId=AUSNATS-2026-R01
+    // And set Basic Auth username to the boatId (e.g., AUS99)
     if (path === "/ingest/owntracks") {
       if (request.method !== "POST") {
         return withCors(new Response("Method Not Allowed", { status: 405 }));
@@ -167,20 +190,23 @@ export default {
         return withCors(new Response("Bad JSON", { status: 400 }));
       }
 
-      // OwnTracks sends several event types; we only accept location-like payloads.
-      const t = String(body?._type || "").toLowerCase();
-      if (t && t !== "location") {
-        // Ignore non-location events but respond 200 so OwnTracks stays happy.
+      // OwnTracks sends multiple event types; accept only location-ish.
+      const ttype = String(body?._type || "").toLowerCase();
+      if (ttype && ttype !== "location") {
+        // Return 200 so OwnTracks stays happy.
         return withCors(new Response("ok", { status: 200 }));
       }
 
-      const updatePayload = ownTracksToUpdatePayload(url, body);
+      const { user: authBoatId } = parseBasicAuth(request);
+      const updatePayload = ownTracksToUpdatePayload(url, body, authBoatId);
+
       if (!updatePayload) {
         return withCors(new Response("Missing raceId/boatId/lat/lon", { status: 400 }));
       }
 
       const raceId = updatePayload.raceId;
 
+      // Forward into the race Durable Object /update
       const doUrl = new URL(request.url);
       doUrl.protocol = "https:";
       doUrl.host = "do";
@@ -193,7 +219,6 @@ export default {
       });
 
       const resp = await stubForRace(env, raceId).fetch(fwd);
-      // We always return 200-ish if DO accepted; pass through status for debugging
       return withCors(resp);
     }
 
@@ -201,18 +226,11 @@ export default {
     if (path === "/ws/live") {
       const raceId = getRaceIdFromUrl(url);
       if (!raceId) return withCors(new Response("Missing raceId", { status: 400 }));
-      // Don't wrap WebSocket responses in CORS - pass through directly
       return stubForRace(env, raceId).fetch(request);
     }
 
     // Read-only endpoints served by DO
-    if (
-      path === "/boats" ||
-      path === "/replay-multi" ||
-      path === "/autocourse" ||
-      path === "/export/gpx" ||
-      path === "/export/kml"
-    ) {
+    if (path === "/boats") {
       const raceId = getRaceIdFromUrl(url);
       if (!raceId) return withCors(new Response("Missing raceId", { status: 400 }));
 
@@ -224,7 +242,7 @@ export default {
       return withCors(await stubForRace(env, raceId).fetch(new Request(doUrl.toString(), request)));
     }
 
-    // Update endpoint: POST body forwarded into DO
+    // Manual update endpoint (your existing API clients can POST here)
     if (request.method === "POST" && path === "/update") {
       const bodyText = await request.text();
       let parsed: any;
@@ -254,4 +272,3 @@ export default {
     return withCors(new Response("Not found", { status: 404 }));
   },
 };
-

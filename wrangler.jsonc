@@ -1,36 +1,66 @@
 {
-	"$schema": "./node_modules/wrangler/config-schema.json",
-	"name": "finntrack-api",
-	"main": "src/index.ts",
-	"compatibility_date": "2025-04-01",
-	"durable_objects": {
-		"bindings": [
-			{
-				"name": "RACE_STATE",
-				"class_name": "RaceState"
-			}
-		]
-	},
-	"kv_namespaces": [
-		{
-			"binding": "HISTORY",
-			"id": "191134472c4e49ea8605d58ada9e21b6",
-			"remote": true
-		}
-	],
-	"r2_buckets": [
-		{
-			"binding": "RACES",
-			"bucket_name": "finntrack-races"
-		}
-	],
-	"assets": {
-		"directory": "./public"
-	},
-	"migrations": [
-		{
-			"tag": "v1",
-			"new_sqlite_classes": ["RaceState"]
-		}
-	]
+  "$schema": "./node_modules/wrangler/config-schema.json",
+
+  // Worker name in Cloudflare
+  "name": "finntrack-api",
+
+  // Your Cloudflare account (from wrangler whoami)
+  "account_id": "76aabccf8b04910c88ef76d08406f8d5",
+
+  // Entry point for your Worker
+  "main": "src/index.ts",
+
+  // Keep this as-is unless you intentionally target a different date
+  "compatibility_date": "2025-04-01",
+
+  // IMPORTANT: routes make api.finntracker.org point at this Worker
+  "routes": [
+    { "pattern": "api.finntracker.org/*", "zone_name": "finntracker.org" }
+  ],
+
+  // Optional: only keep if your Worker code uses env.SHARE
+  "vars": {
+    "SHARE": "NDGSUPQ8HM"
+  },
+
+  // Durable Object binding -> class name must match your code export: `export class RaceState`
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RACE_STATE",
+        "class_name": "RaceState"
+      }
+    ]
+  },
+
+  // KV binding (you already have this ID)
+  "kv_namespaces": [
+    {
+      "binding": "HISTORY",
+      "id": "191134472c4e49ea8605d58ada9e21b6"
+      // If you use preview, you can add:
+      // "preview_id": "..."
+    }
+  ],
+
+  // R2 binding
+  "r2_buckets": [
+    {
+      "binding": "RACES",
+      "bucket_name": "finntrack-races"
+    }
+  ],
+
+  // Serve static site files from /public
+  "assets": {
+    "directory": "./public"
+  },
+
+  // Durable Object SQLite class migration
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["RaceState"]
+    }
+  ]
 }

@@ -3,7 +3,7 @@
 
   // Worker name in Cloudflare
   // wrangler.jsonc
-"name": "finntrack-api-worker",
+"name": "finntrack-api",
 
   // Your Cloudflare account (from wrangler whoami)
   "account_id": "76aabccf8b04910c88ef76d08406f8d5",

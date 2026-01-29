@@ -2,7 +2,8 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
 
   // Worker name in Cloudflare
-  "name": "finntrack-api",
+  // wrangler.jsonc
+"name": "finntrack-api-worker",
 
   // Your Cloudflare account (from wrangler whoami)
   "account_id": "76aabccf8b04910c88ef76d08406f8d5",

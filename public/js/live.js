@@ -14,6 +14,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     let selectedBoat = null;
     let followingBoat = null;
     let fleetData = null;
+    let currentBoats = {}; // Track current boats for reference
 
     // DOM elements
     const raceSelect = document.getElementById("raceSelect");
@@ -46,7 +47,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             fleetData = await res.json();
             populateBoatSelect();
         } catch (err) {
-            console.log("Fleet data not available");
+            console.log("Fleet data not available:", err);
         }
     }
 
@@ -69,7 +70,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     function updateBoatSelectFromLive(boatIds) {
         if (!boatSelect) return;
 
-        // Add any boats that aren't in fleet data
         const existingOptions = new Set(Array.from(boatSelect.options).map(o => o.value));
 
         boatIds.forEach(boatId => {
@@ -101,14 +101,29 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     // Load race list
     async function populateRaceList() {
+        console.log("Loading race list...");
         const races = await FinnTrackAPI.loadRaceList();
+        console.log("Loaded races:", races.length);
+
+        if (!raceSelect) return;
+
         raceSelect.innerHTML = "";
+
+        if (races.length === 0) {
+            const opt = document.createElement("option");
+            opt.value = "";
+            opt.textContent = "-- No races available --";
+            raceSelect.appendChild(opt);
+            return;
+        }
+
         races.forEach(r => {
             const opt = document.createElement("option");
             opt.value = r.id;
             opt.textContent = r.label;
             raceSelect.appendChild(opt);
         });
+
         if (races.length > 0) {
             FinnTrackAPI.setRaceId(races[0].id);
         }
@@ -116,25 +131,41 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     // Update connection status indicator
     function setConnectionStatus(status) {
+        if (!connectionStatus) return;
+
         const dot = connectionStatus.querySelector(".status-dot");
         const text = connectionStatus.querySelector(".status-text");
 
-        dot.className = "status-dot " + status;
-        text.textContent = status === "connected" ? "Connected" :
-                          status === "connecting" ? "Connecting..." : "Disconnected";
+        if (dot) {
+            dot.className = "status-dot " + status;
+        }
+        if (text) {
+            text.textContent = status === "connected" ? "Connected" :
+                              status === "connecting" ? "Connecting..." : "Disconnected";
+        }
     }
 
     // Render boat list in sidebar
-    function renderBoatList(boats) {
+    function renderBoatList(boatIds) {
+        if (!boatList) return;
+
         boatList.innerHTML = "";
-        boats.sort().forEach(boatId => {
+        const sortedIds = [...boatIds].sort();
+
+        sortedIds.forEach(boatId => {
             const li = document.createElement("li");
+            li.dataset.boat = boatId;
             const color = FinnTrackMap.getBoatColor(boatId);
             li.innerHTML = `<span style="color:${color}">●</span> ${boatId}`;
+            li.style.cursor = "pointer";
+            li.style.padding = "5px";
             li.onclick = () => {
                 selectedBoat = boatId;
                 FinnTrackMap.focusBoat(boatId);
                 FinnTrackMap.highlightBoat(boatId);
+                if (currentBoats[boatId]) {
+                    FinnTrackMap.showBoatPopup(boatId, currentBoats[boatId]);
+                }
             };
             boatList.appendChild(li);
         });
@@ -143,62 +174,126 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Handle incoming WebSocket messages
     function handleMessage(msg) {
         setConnectionStatus("connected");
+        console.log("Handling message type:", msg.type);
 
-        if (msg.type === "full") {
-            // Full boat snapshot
-            FinnTrackMap.clearBoatLayers();
+        // Handle "full" message (initial snapshot or full refresh)
+        if (msg.type === "full" || msg.type === "snapshot" || msg.type === "roster") {
             const boats = msg.boats || {};
-            for (const boatId in boats) {
-                FinnTrackMap.updateBoat(boatId, boats[boatId], {
+
+            // Handle both object and array formats
+            let boatsObj = boats;
+            if (Array.isArray(boats)) {
+                boatsObj = {};
+                boats.forEach(b => {
+                    if (b.boatId) boatsObj[b.boatId] = b;
+                });
+            }
+
+            FinnTrackMap.clearBoatLayers();
+            currentBoats = boatsObj;
+
+            for (const boatId in boatsObj) {
+                const boat = boatsObj[boatId];
+                if (!boat) continue;
+
+                // Normalize boat data for map
+                const frame = {
+                    lat: boat.lat ?? boat.latitude,
+                    lng: boat.lng ?? boat.lon ?? boat.longitude,
+                    speed: boat.speed ?? boat.sog ?? 0,
+                    heading: boat.heading ?? boat.cog ?? 0,
+                    timestamp: boat.timestamp ?? boat.t ?? boat.lastSeen
+                };
+
+                // Skip boats without valid coordinates
+                if (!Number.isFinite(frame.lat) || !Number.isFinite(frame.lng)) {
+                    console.log(`Skipping boat ${boatId} - no valid coordinates`);
+                    continue;
+                }
+
+                FinnTrackMap.updateBoat(boatId, frame, {
                     appendTrail: false,
                     onClick: (id) => {
                         selectedBoat = id;
                         FinnTrackMap.focusBoat(id);
                         FinnTrackMap.highlightBoat(id);
-                        FinnTrackMap.showBoatPopup(id, boats[id]);
+                        FinnTrackMap.showBoatPopup(id, frame);
                     }
                 });
             }
-            renderBoatList(Object.keys(boats));
-            updateBoatSelectFromLive(Object.keys(boats));
+
+            const boatIds = Object.keys(boatsObj).filter(id => {
+                const b = boatsObj[id];
+                return b && Number.isFinite(b.lat ?? b.latitude) && Number.isFinite(b.lng ?? b.lon ?? b.longitude);
+            });
+
+            renderBoatList(boatIds);
+            updateBoatSelectFromLive(boatIds);
 
             // Re-focus on followed boat if set
-            if (followingBoat && boats[followingBoat]) {
-                FinnTrackMap.focusBoat(followingBoat, 16);
-                FinnTrackMap.highlightBoat(followingBoat);
+            if (followingBoat && boatsObj[followingBoat]) {
+                const boat = boatsObj[followingBoat];
+                if (Number.isFinite(boat.lat) && Number.isFinite(boat.lng ?? boat.lon)) {
+                    FinnTrackMap.focusBoat(followingBoat, 16);
+                    FinnTrackMap.highlightBoat(followingBoat);
+                }
             }
         }
 
-        if (msg.type === "update") {
-            // Single boat update
-            FinnTrackMap.updateBoat(msg.boat, msg.data, {
+        // Handle "update" message (single boat telemetry)
+        if (msg.type === "update" || msg.type === "telemetry") {
+            const boatId = msg.boat || msg.boatId;
+            const data = msg.data || msg.telemetry || msg;
+
+            if (!boatId || !data) return;
+
+            // Normalize boat data
+            const frame = {
+                lat: data.lat ?? data.latitude,
+                lng: data.lng ?? data.lon ?? data.longitude,
+                speed: data.speed ?? data.sog ?? 0,
+                heading: data.heading ?? data.cog ?? 0,
+                timestamp: data.timestamp ?? data.t ?? data.lastSeen
+            };
+
+            // Skip if no valid coordinates
+            if (!Number.isFinite(frame.lat) || !Number.isFinite(frame.lng)) {
+                console.log(`Skipping update for ${boatId} - no valid coordinates`);
+                return;
+            }
+
+            currentBoats[boatId] = data;
+
+            FinnTrackMap.updateBoat(boatId, frame, {
                 appendTrail: true,
                 onClick: (id) => {
                     selectedBoat = id;
                     FinnTrackMap.focusBoat(id);
                     FinnTrackMap.highlightBoat(id);
-                    FinnTrackMap.showBoatPopup(id, msg.data);
+                    FinnTrackMap.showBoatPopup(id, frame);
                 }
             });
 
             // Auto-center on followed boat
-            if (followingBoat === msg.boat) {
-                FinnTrackMap.focusBoat(msg.boat, 16);
+            if (followingBoat === boatId) {
+                FinnTrackMap.focusBoat(boatId, 16);
             }
 
             // Add to boat list if new
-            if (!boatList.querySelector(`[data-boat="${msg.boat}"]`)) {
+            if (boatList && !boatList.querySelector(`[data-boat="${boatId}"]`)) {
                 const li = document.createElement("li");
-                li.dataset.boat = msg.boat;
-                const color = FinnTrackMap.getBoatColor(msg.boat);
-                li.innerHTML = `<span style="color:${color}">●</span> ${msg.boat}`;
+                li.dataset.boat = boatId;
+                const color = FinnTrackMap.getBoatColor(boatId);
+                li.innerHTML = `<span style="color:${color}">●</span> ${boatId}`;
+                li.style.cursor = "pointer";
+                li.style.padding = "5px";
                 li.onclick = () => {
-                    selectedBoat = msg.boat;
-                    FinnTrackMap.focusBoat(msg.boat);
-                    FinnTrackMap.highlightBoat(msg.boat);
+                    selectedBoat = boatId;
+                    FinnTrackMap.focusBoat(boatId);
+                    FinnTrackMap.highlightBoat(boatId);
                 };
                 boatList.appendChild(li);
-                updateBoatSelectFromLive([msg.boat]);
+                updateBoatSelectFromLive([boatId]);
             }
         }
     }
@@ -223,24 +318,36 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     // Load course and connect
     async function loadRace() {
-        const raceId = raceSelect.value;
-        if (!raceId) return;
+        if (!raceSelect) return;
 
-        FinnTrackAPI.setRaceId(raceId);
+        const selectedRaceId = raceSelect.value;
+        if (!selectedRaceId) {
+            console.log("No race selected");
+            return;
+        }
+
+        console.log("Loading race:", selectedRaceId);
+        FinnTrackAPI.setRaceId(selectedRaceId);
         FinnTrackAPI.disconnectLive();
         FinnTrackMap.clearBoatLayers();
-        boatList.innerHTML = "";
+        currentBoats = {};
+
+        if (boatList) boatList.innerHTML = "";
 
         // Load course layers
         const courseData = await FinnTrackAPI.loadCourseData();
-        FinnTrackMap.renderCourseLayers(courseData);
+        if (courseData) {
+            FinnTrackMap.renderCourseLayers(courseData);
+        }
 
         // Connect to live feed
         connect();
     }
 
     // Event listeners
-    loadRaceBtn.addEventListener("click", loadRace);
+    if (loadRaceBtn) {
+        loadRaceBtn.addEventListener("click", loadRace);
+    }
 
     // Follow boat controls
     if (followBoatBtn) {
@@ -286,7 +393,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (exportGPX) exportGPX.addEventListener("click", () => FinnTrackAPI.exportGPX());
     if (exportKML) exportKML.addEventListener("click", () => FinnTrackAPI.exportKML());
     if (exportJSON) exportJSON.addEventListener("click", async () => {
-        const data = await FinnTrackAPI.loadReplayData();
+        const data = await FinnTrackAPI.loadBoatsSnapshot();
         if (data && data.boats) {
             FinnTrackAPI.exportJSON(data.boats);
         }
@@ -299,7 +406,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
 
     // Initial load
+    console.log("Starting initial load...");
     await loadFleetData();
     await populateRaceList();
-    await loadRace();
+
+    // Auto-load first race if available
+    if (raceSelect && raceSelect.value) {
+        await loadRace();
+    }
 });

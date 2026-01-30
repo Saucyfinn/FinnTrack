@@ -5,7 +5,7 @@
 
 const FinnTrackAPI = (function() {
     let ws = null;
-    let raceId = "RACE1";
+    let raceId = "AUSNATS-2026-R01";
     let onMessageCallback = null;
     let onCloseCallback = null;
 
@@ -13,51 +13,110 @@ const FinnTrackAPI = (function() {
     function getRaceId() { return raceId; }
     function setRaceId(id) { raceId = id; }
 
+    // Determine API base URL (supports both api subdomain and same origin)
+    function getApiBase() {
+        // If we're on finntracker.org, use api.finntracker.org
+        if (location.hostname === 'finntracker.org' || location.hostname === 'www.finntracker.org') {
+            return 'https://api.finntracker.org';
+        }
+        // Otherwise use same origin (for local dev)
+        return '';
+    }
+
     // Load race list from server
     async function loadRaceList() {
-        const res = await fetch("/race/list");
-        if (!res.ok) return [];
-        const json = await res.json();
-        return json.races || [];
+        try {
+            // Try /race/list first (new endpoint), fall back to /races
+            let res = await fetch(`${getApiBase()}/race/list`);
+            if (!res.ok) {
+                res = await fetch(`${getApiBase()}/races`);
+            }
+            if (!res.ok) return [];
+            const json = await res.json();
+            return json.races || [];
+        } catch (err) {
+            console.error("Failed to load race list:", err);
+            return [];
+        }
     }
 
     // Load course data (start line, finish line, marks, polygon, wind)
     async function loadCourseData() {
-        const res = await fetch(`/autocourse?raceId=${encodeURIComponent(raceId)}`);
-        if (!res.ok) return null;
-        return await res.json();
+        try {
+            const res = await fetch(`${getApiBase()}/autocourse?raceId=${encodeURIComponent(raceId)}`);
+            if (!res.ok) return null;
+            return await res.json();
+        } catch (err) {
+            console.error("Failed to load course data:", err);
+            return null;
+        }
     }
 
     // Load replay data
     async function loadReplayData() {
-        const res = await fetch(`/replay-multi?raceId=${encodeURIComponent(raceId)}`);
-        if (!res.ok) return null;
-        return await res.json();
+        try {
+            const res = await fetch(`${getApiBase()}/replay-multi?raceId=${encodeURIComponent(raceId)}`);
+            if (!res.ok) return null;
+            return await res.json();
+        } catch (err) {
+            console.error("Failed to load replay data:", err);
+            return null;
+        }
     }
 
     // Load current boats snapshot
     async function loadBoatsSnapshot() {
-        const res = await fetch(`/boats?raceId=${encodeURIComponent(raceId)}`);
-        if (!res.ok) return null;
-        return await res.json();
+        try {
+            const res = await fetch(`${getApiBase()}/boats?raceId=${encodeURIComponent(raceId)}`);
+            if (!res.ok) return null;
+            return await res.json();
+        } catch (err) {
+            console.error("Failed to load boats snapshot:", err);
+            return null;
+        }
     }
 
     // WebSocket connection for live updates
+    // Supports both /live and /ws/live endpoints
     function connectLive(onMessage, onClose) {
         onMessageCallback = onMessage;
         onCloseCallback = onClose;
 
-        if (ws) { ws.close(); ws = null; }
+        if (ws) {
+            ws.close();
+            ws = null;
+        }
+
+        // Determine WebSocket URL
+        let wsHost = location.host;
+        if (location.hostname === 'finntracker.org' || location.hostname === 'www.finntracker.org') {
+            wsHost = 'api.finntracker.org';
+        }
 
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        ws = new WebSocket(`${protocol}//${location.host}/live?raceId=${encodeURIComponent(raceId)}`);
 
-        ws.onmessage = (evt) => {
-            const msg = JSON.parse(evt.data);
-            if (onMessageCallback) onMessageCallback(msg);
+        // Try /live first (simpler), will also work with /ws/live on server side
+        const wsUrl = `${protocol}//${wsHost}/live?raceId=${encodeURIComponent(raceId)}`;
+
+        console.log("Connecting to WebSocket:", wsUrl);
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            console.log("WebSocket connected");
         };
 
-        ws.onclose = () => {
+        ws.onmessage = (evt) => {
+            try {
+                const msg = JSON.parse(evt.data);
+                console.log("WebSocket message:", msg.type);
+                if (onMessageCallback) onMessageCallback(msg);
+            } catch (err) {
+                console.error("Failed to parse WebSocket message:", err);
+            }
+        };
+
+        ws.onclose = (evt) => {
+            console.log("WebSocket closed:", evt.code, evt.reason);
             if (onCloseCallback) onCloseCallback();
         };
 
@@ -79,29 +138,34 @@ const FinnTrackAPI = (function() {
 
     // Export functions
     async function downloadFromEndpoint(url, filename) {
-        const res = await fetch(url);
-        if (!res.ok) {
-            alert(`Export failed: ${res.status}`);
-            return;
+        try {
+            const res = await fetch(url);
+            if (!res.ok) {
+                alert(`Export failed: ${res.status}`);
+                return;
+            }
+            const blob = await res.blob();
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            link.download = filename;
+            link.click();
+            URL.revokeObjectURL(link.href);
+        } catch (err) {
+            console.error("Export failed:", err);
+            alert("Export failed");
         }
-        const blob = await res.blob();
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = filename;
-        link.click();
-        URL.revokeObjectURL(link.href);
     }
 
     function exportGPX() {
         downloadFromEndpoint(
-            `/export/gpx?raceId=${encodeURIComponent(raceId)}`,
+            `${getApiBase()}/export/gpx?raceId=${encodeURIComponent(raceId)}`,
             `finntrack_${raceId}.gpx`
         );
     }
 
     function exportKML() {
         downloadFromEndpoint(
-            `/export/kml?raceId=${encodeURIComponent(raceId)}`,
+            `${getApiBase()}/export/kml?raceId=${encodeURIComponent(raceId)}`,
             `finntrack_${raceId}.kml`
         );
     }

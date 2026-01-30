@@ -1,36 +1,44 @@
 {
-	"$schema": "./node_modules/wrangler/config-schema.json",
-	"name": "finntrack-api",
-	"main": "src/index.ts",
-	"compatibility_date": "2025-04-01",
-	"durable_objects": {
-		"bindings": [
-			{
-				"name": "RACE_STATE",
-				"class_name": "RaceState"
-			}
-		]
-	},
-	"kv_namespaces": [
-		{
-			"binding": "HISTORY",
-			"id": "191134472c4e49ea8605d58ada9e21b6",
-			"remote": true
-		}
-	],
-	"r2_buckets": [
-		{
-			"binding": "RACES",
-			"bucket_name": "finntrack-races"
-		}
-	],
-	"assets": {
-		"directory": "./public"
-	},
-	"migrations": [
-		{
-			"tag": "v1",
-			"new_sqlite_classes": ["RaceState"]
-		}
-	]
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "finntrack-api-worker",
+  "account_id": "76aabccf8b04910c88ef76d08406f8d5",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "routes": [
+    { "pattern": "api.finntracker.org/*", "zone_name": "finntracker.org" },
+    { "pattern": "finntracker.org/*", "zone_name": "finntracker.org" }
+  ],
+  "vars": {
+    "SHARE": "NDGSUPQ8HM"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RACE_STATE",
+        "class_name": "RaceState"
+      }
+    ]
+  },
+  "kv_namespaces": [
+    {
+      "binding": "HISTORY",
+      "id": "191134472c4e49ea8605d58ada9e21b6"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "RACES",
+      "bucket_name": "finntrack-races"
+    }
+  ],
+  "assets": {
+    "directory": "./public"
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["RaceState"]
+    }
+  ]
 }

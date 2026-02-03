@@ -17,28 +17,10 @@ bindings = [
 tag = "v1"
 new_sqlite_classes = ["RaceState"]
 
-# KV Namespaces
-[[kv_namespaces]]
-binding = "HISTORY"
-id = "history"
-
-[[kv_namespaces]]
-binding = "HISTORY_PREV"
-id = "history-prev"
-
-# R2 Buckets (lowercase bucket name required)
+# R2 Bucket for race data
 [[r2_buckets]]
 binding = "RACES"
 bucket_name = "races"
 
-# D1 Database
-[[d1_databases]]
-binding = "DB"
-database_name = "finntrack-db"
-database_id = "finntrack-db"
-
 [vars]
 CORS_ORIGIN = "*"
-DEVICE_API_KEY = ""
-SHARE = ""
-API_KEY = ""

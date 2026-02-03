@@ -261,6 +261,45 @@ export default {
       return stub.fetch(request);
     }
 
+    // ---- Update endpoint GET (Safari-friendly, avoids CORS preflight) ----
+    if (request.method === "GET" && path === "/update") {
+      if (!isAuthed(request, env)) return jsonResponse({ ok: false, error: "Unauthorized" }, 401, {}, corsOrigin);
+
+      const raceId = url.searchParams.get("raceId") || "LIVE";
+      const boatId = url.searchParams.get("boatId") || url.searchParams.get("id");
+      const lat = parseFloat(url.searchParams.get("lat") || "");
+      const lon = parseFloat(url.searchParams.get("lon") || "");
+
+      if (!boatId) return jsonResponse({ ok: false, error: "Missing boatId" }, 400, {}, corsOrigin);
+      if (isNaN(lat) || isNaN(lon)) return jsonResponse({ ok: false, error: "Missing or invalid lat/lon" }, 400, {}, corsOrigin);
+
+      const payload: any = { boatId, lat, lon };
+      const boatName = url.searchParams.get("boatName");
+      if (boatName) payload.boatName = boatName;
+      const sog = parseFloat(url.searchParams.get("sog") || "");
+      if (!isNaN(sog)) payload.sog = sog;
+      const cog = parseFloat(url.searchParams.get("cog") || "");
+      if (!isNaN(cog)) payload.cog = cog;
+      payload.t = parseInt(url.searchParams.get("t") || "") || Date.now();
+
+      try {
+        const id = env.RACE_STATE.idFromName(raceId);
+        const stub = env.RACE_STATE.get(id);
+        const doRequest = new Request("https://internal/update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        await stub.fetch(doRequest);
+        return new Response("OK", {
+          status: 200,
+          headers: { "Content-Type": "text/plain", "Access-Control-Allow-Origin": corsOrigin },
+        });
+      } catch (e: any) {
+        return jsonResponse({ ok: false, error: e?.message || String(e) }, 500, {}, corsOrigin);
+      }
+    }
+
     // ---- Update endpoint (FinnTrack app + Traccar JSON) ----
     if (request.method === "POST" && (path === "/update" || path === "/owntracks" || path === "/ingest")) {
       if (!isAuthed(request, env)) return jsonResponse({ ok: false, error: "Unauthorized" }, 401, {}, corsOrigin);

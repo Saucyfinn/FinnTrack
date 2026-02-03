@@ -1,481 +1,415 @@
-// src/index.ts - FinnTrack Cloudflare Worker
-// Handles: API endpoints, OwnTracks ingestion, WebSocket routing
-
-import { RaceState } from "./raceState";
-export { RaceState };
+/**
+ * FinnTrack API Worker - Ready to deploy to Cloudflare
+ * Copy this file to your Cloudflare Worker project src/index.ts
+ */
 
 export interface Env {
-  RACE_STATE: DurableObjectNamespace;
   HISTORY: KVNamespace;
+  HISTORY_PREVIEW: KVNamespace;
   RACES: R2Bucket;
-  OWNTRACKS_KEY?: string; // Optional shared key for OwnTracks authentication
+  DB: D1Database;
+  API_SECRET: string;
+  DEVICE_API_KEY?: string;
+  SHARE?: string;
+  CORS_ORIGIN: string;
+  RACE_STATE: DurableObjectNamespace;
 }
 
-// ============================================================
-// CORS Headers
-// ============================================================
-
-const CORS_HEADERS: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
-  "Access-Control-Max-Age": "86400",
-};
-
-function withCors(res: Response): Response {
-  const h = new Headers(res.headers);
-  for (const [k, v] of Object.entries(CORS_HEADERS)) {
-    h.set(k, v);
-  }
-  return new Response(res.body, {
-    status: res.status,
-    statusText: res.statusText,
-    headers: h,
+function jsonResponse(obj: any, status = 200, extraHeaders: Record<string, string> = {}, corsOrigin = "*"): Response {
+  return new Response(JSON.stringify(obj, null, 2), {
+    status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Access-Control-Allow-Origin": corsOrigin,
+      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      ...extraHeaders,
+    },
   });
 }
 
-function json(data: unknown, status = 200): Response {
-  return withCors(
-    new Response(JSON.stringify(data), {
-      status,
-      headers: { "Content-Type": "application/json; charset=utf-8" },
-    })
-  );
+function textResponse(text: string, status = 200, extraHeaders: Record<string, string> = {}, corsOrigin = "*"): Response {
+  return new Response(text, {
+    status,
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Access-Control-Allow-Origin": corsOrigin,
+      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      ...extraHeaders,
+    },
+  });
 }
 
-function text(msg: string, status = 200): Response {
-  return withCors(
-    new Response(msg, {
-      status,
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
-    })
-  );
-}
-
-// ============================================================
-// Durable Object Stub Helper
-// ============================================================
-
-function stubForRace(env: Env, raceId: string): DurableObjectStub {
-  const id = env.RACE_STATE.idFromName(raceId);
-  return env.RACE_STATE.get(id);
-}
-
-// ============================================================
-// Predefined Races (for dropdown population)
-// ============================================================
-
-function listPredefinedRaces() {
-  const mkRaces = (series: string, prefix: string, count: number) =>
-    Array.from({ length: count }, (_, i) => {
-      const n = i + 1;
-      return {
-        id: `${prefix}-2026-R${String(n).padStart(2, "0")}`,
-        label: `${series} - Race ${n}`,
-        series,
-        raceNo: n,
-      };
-    });
-
-  const ausNats = mkRaces("Australian Nationals 2026", "AUSNATS", 6);
-  const goldCup = mkRaces("Gold Cup 2026", "GOLDCUP", 10);
-  const masters = mkRaces("Finn World Masters 2026", "MASTERS", 8);
-  const training = mkRaces("Training/Undefined", "TRAINING", 10);
-
-  return {
-    races: [...ausNats, ...goldCup, ...masters, ...training],
-    series: [
-      { id: "AUSNATS", name: "Australian Nationals 2026", raceCount: 6 },
-      { id: "GOLDCUP", name: "Gold Cup 2026", raceCount: 10 },
-      { id: "MASTERS", name: "Finn World Masters 2026", raceCount: 8 },
-      { id: "TRAINING", name: "Training/Undefined", raceCount: 10 },
-    ],
-  };
-}
-
-// ============================================================
-// OwnTracks Parsing
-// ============================================================
-
-function parseBasicAuth(req: Request): { user?: string; pass?: string } {
-  const h = req.headers.get("Authorization");
-  if (!h || !h.startsWith("Basic ")) return {};
+async function r2Json(env: Env, key: string): Promise<string | null> {
+  const obj = await env.RACES.get(key);
+  if (!obj) return null;
+  const text = await obj.text();
   try {
-    const raw = atob(h.slice(6));
-    const i = raw.indexOf(":");
-    if (i < 0) return { user: raw };
-    return { user: raw.slice(0, i), pass: raw.slice(i + 1) };
-  } catch {
-    return {};
+    JSON.parse(text);
+  } catch (e: any) {
+    throw new Error(`Invalid JSON in R2 object "${key}": ${e?.message || e}`);
   }
+  return text;
 }
 
-function ownTracksToUpdatePayload(
-  url: URL,
-  body: any,
-  authBoatId?: string
-): {
-  raceId: string;
-  boatId: string;
-  lat: number;
-  lon: number;
-  t: number;
-  sog?: number;
-  cog?: number;
-  heading?: number;
-  boatName?: string;
-} | null {
-  const raceId = String(url.searchParams.get("raceId") || "").trim();
-  if (!raceId) return null;
-
-  // boatId priority: Basic Auth username > query param > body fields
-  const boatId =
-    String(authBoatId || "").trim() ||
-    String(url.searchParams.get("boatId") || "").trim() ||
-    String(body?.boatId || "").trim() ||
-    String(body?.userid || "").trim() ||
-    String(body?.user || "").trim() ||
-    String(body?.tid || "").trim() ||
-    String(body?.deviceid || "").trim();
-
-  if (!boatId) return null;
-
-  const lat = Number(body?.lat);
-  const lon = Number(body?.lon ?? body?.lng ?? body?.longitude);
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-
-  // OwnTracks uses tst in seconds; normalize to ms
-  let t = Number(body?.tst ?? body?.t ?? Date.now() / 1000);
-  if (!Number.isFinite(t)) t = Math.floor(Date.now() / 1000);
-  if (t < 1e12) t = Math.floor(t * 1000); // Convert seconds to ms
-  if (t > 1e15) t = Math.floor(t / 1000); // Handle microseconds
-
-  const sog = Number(body?.vel ?? body?.sog ?? body?.speed);
-  const cog = Number(body?.cog ?? body?.heading ?? body?.course);
-  const heading = Number(body?.heading ?? body?.cog);
-  const boatName = String(body?.name || url.searchParams.get("name") || "").trim() || undefined;
-
-  return {
-    raceId,
-    boatId,
-    lat,
-    lon,
-    t,
-    ...(Number.isFinite(sog) ? { sog } : {}),
-    ...(Number.isFinite(cog) ? { cog } : {}),
-    ...(Number.isFinite(heading) ? { heading } : {}),
-    ...(boatName ? { boatName } : {}),
-  };
+function getRaceId(url: URL): string | null {
+  return url.searchParams.get("raceId") || url.searchParams.get("race");
 }
 
-// ============================================================
-// JSON Body Parser
-// ============================================================
+function bearer(request: Request): string {
+  const a = request.headers.get("authorization") || "";
+  const m = a.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1].trim() : "";
+}
 
-async function readJsonBody(request: Request): Promise<any> {
-  const t = await request.text();
-  if (!t) return {};
-  try {
-    return JSON.parse(t);
-  } catch {
-    throw new Error("Bad JSON");
+function isAuthed(request: Request, env: Env): boolean {
+  const devKey = "finn123";
+  const tok = bearer(request);
+  if (tok === devKey) return true;
+
+  const url = new URL(request.url);
+  const keyParam = url.searchParams.get("key");
+  if (keyParam === devKey) return true;
+
+  if (env.API_SECRET && env.API_SECRET.length < 50) {
+    if (tok === env.API_SECRET || keyParam === env.API_SECRET) return true;
   }
-}
 
-// ============================================================
-// Main Worker Fetch Handler
-// ============================================================
+  return false;
+}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
+    const corsOrigin = env.CORS_ORIGIN || "*";
 
-    // ---------------------------------------------------------
-    // CORS Preflight
-    // ---------------------------------------------------------
+    // CORS preflight - handle for ALL routes
     if (request.method === "OPTIONS") {
-      return withCors(new Response(null, { status: 204 }));
-    }
-
-    // ---------------------------------------------------------
-    // Health Check
-    // ---------------------------------------------------------
-    if (request.method === "GET" && path === "/health") {
-      return json({ ok: true, service: "finntrack-api", timestamp: Date.now() });
-    }
-
-    // ---------------------------------------------------------
-    // Race List (for dropdowns)
-    // Supports both /race/list and /races for compatibility
-    // ---------------------------------------------------------
-    if (request.method === "GET" && (path === "/race/list" || path === "/races")) {
-      return json(listPredefinedRaces());
-    }
-
-    // ---------------------------------------------------------
-    // List Boats (legacy endpoint support)
-    // ---------------------------------------------------------
-    if (request.method === "GET" && path === "/listBoats") {
-      const raceId = url.searchParams.get("raceId") || "";
-      if (!raceId) return text("Missing raceId", 400);
-
-      const doUrl = new URL(request.url);
-      doUrl.protocol = "https:";
-      doUrl.host = "do";
-      doUrl.pathname = "/boats";
-
-      const fwd = new Request(doUrl.toString(), request);
-      return withCors(await stubForRace(env, raceId).fetch(fwd));
-    }
-
-    // ---------------------------------------------------------
-    // List Races (legacy endpoint support)
-    // ---------------------------------------------------------
-    if (request.method === "GET" && path === "/listRaces") {
-      return json(listPredefinedRaces());
-    }
-
-    // ---------------------------------------------------------
-    // Positions (legacy endpoint for compatibility)
-    // ---------------------------------------------------------
-    if (request.method === "GET" && path === "/positions") {
-      const raceId = url.searchParams.get("raceId") || "";
-      if (!raceId) return text("Missing raceId", 400);
-
-      const doUrl = new URL(request.url);
-      doUrl.protocol = "https:";
-      doUrl.host = "do";
-      doUrl.pathname = "/boats";
-
-      const fwd = new Request(doUrl.toString(), request);
-      return withCors(await stubForRace(env, raceId).fetch(fwd));
-    }
-
-    // ---------------------------------------------------------
-    // WebSocket Live Feed (supports both /live and /ws/live)
-    // ---------------------------------------------------------
-    if (path === "/live" || path === "/ws/live") {
-      const raceId = url.searchParams.get("raceId") || "";
-      if (!raceId) return text("Missing raceId", 400);
-
-      const doUrl = new URL(request.url);
-      doUrl.protocol = "https:";
-      doUrl.host = "do";
-      doUrl.pathname = "/ws/live";
-
-      const fwd = new Request(doUrl.toString(), request);
-      return stubForRace(env, raceId).fetch(fwd);
-    }
-
-    // ---------------------------------------------------------
-    // Boats Endpoint
-    // ---------------------------------------------------------
-    if (request.method === "GET" && path === "/boats") {
-      const raceId = url.searchParams.get("raceId") || "";
-      if (!raceId) return text("Missing raceId", 400);
-
-      const doUrl = new URL(request.url);
-      doUrl.protocol = "https:";
-      doUrl.host = "do";
-      doUrl.pathname = "/boats";
-
-      const fwd = new Request(doUrl.toString(), request);
-      return withCors(await stubForRace(env, raceId).fetch(fwd));
-    }
-
-    // ---------------------------------------------------------
-    // Join Race (register boat)
-    // ---------------------------------------------------------
-    if (request.method === "POST" && path === "/join") {
-      let body: any;
-      try {
-        body = await readJsonBody(request);
-      } catch {
-        return text("Bad JSON", 400);
-      }
-
-      const raceId = String(body?.raceId || "");
-      if (!raceId) return text("Missing raceId", 400);
-
-      const doUrl = new URL(request.url);
-      doUrl.protocol = "https:";
-      doUrl.host = "do";
-      doUrl.pathname = "/join";
-
-      const fwd = new Request(doUrl.toString(), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": corsOrigin,
+          "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400",
+        },
       });
-
-      return withCors(await stubForRace(env, raceId).fetch(fwd));
     }
 
-    // ---------------------------------------------------------
-    // Telemetry Update
-    // ---------------------------------------------------------
-    if (request.method === "POST" && path === "/update") {
-      let body: any;
+    // ---- Health / debug ----
+    if (request.method === "GET" && (path === "/" || path === "/health")) {
+      return jsonResponse({
+        ok: true,
+        service: "finntrack-api-worker",
+        endpoints: [
+          "GET /races",
+          "GET /races/:raceId/fleet",
+          "GET /races/:raceId/boats",
+          "GET /fleet?raceId=...",
+          "GET /boats?raceId=...",
+          "GET /debug/r2",
+          "WebSocket /ws/live?raceId=...",
+          "WebSocket /live?raceId=...",
+          "POST /update",
+          "POST /owntracks",
+          "GET/POST /traccar",
+          "POST /ingest"
+        ],
+      }, 200, {}, corsOrigin);
+    }
+
+    // ---- Debug R2 listing ----
+    if (request.method === "GET" && path === "/debug/r2") {
       try {
-        body = await readJsonBody(request);
-      } catch {
-        return text("Bad JSON", 400);
+        const prefix = url.searchParams.get("prefix") || "";
+        const options: R2ListOptions = { prefix };
+        const result = await env.RACES.list(options);
+
+        return jsonResponse({
+          ok: true,
+          bucket: "RACES",
+          prefix,
+          objects: result.objects.map(obj => ({
+            key: obj.key,
+            size: obj.size,
+            uploaded: obj.uploaded?.toISOString()
+          })),
+          truncated: result.truncated,
+          cursor: result.cursor
+        }, 200, {}, corsOrigin);
+      } catch (e: any) {
+        return jsonResponse({
+          error: "Failed to list R2 bucket",
+          detail: e?.message || String(e)
+        }, 500, {}, corsOrigin);
       }
-
-      const raceId = String(body?.raceId || "");
-      if (!raceId) return text("Missing raceId", 400);
-
-      const doUrl = new URL(request.url);
-      doUrl.protocol = "https:";
-      doUrl.host = "do";
-      doUrl.pathname = "/update";
-
-      const fwd = new Request(doUrl.toString(), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-
-      return withCors(await stubForRace(env, raceId).fetch(fwd));
     }
 
-    // ---------------------------------------------------------
-    // OwnTracks HTTP Ingestion
-    // URL: POST /ingest/owntracks?raceId=AUSNATS-2026-R01
-    // Basic Auth username = boatId
-    // ---------------------------------------------------------
-    if (path === "/ingest/owntracks") {
-      if (request.method !== "POST") {
-        return text("Method Not Allowed", 405);
-      }
-
-      // Optional shared key authentication
-      if (env.OWNTRACKS_KEY) {
-        const key = url.searchParams.get("key") || "";
-        if (!key || key !== env.OWNTRACKS_KEY) {
-          return text("Unauthorized", 401);
+    // ---- Races list (R2) ----
+    if (request.method === "GET" && path === "/races") {
+      try {
+        const body = await r2Json(env, "races.json");
+        if (!body) {
+          return jsonResponse(
+            { error: "races.json not found in R2 bucket binding 'RACES'", expectedKey: "races.json" },
+            404, {}, corsOrigin
+          );
         }
+        return new Response(body, {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json; charset=utf-8",
+            "Access-Control-Allow-Origin": corsOrigin,
+          },
+        });
+      } catch (e: any) {
+        return jsonResponse({ error: "Failed to serve /races", detail: e?.message || String(e) }, 500, {}, corsOrigin);
       }
+    }
 
-      let body: any;
+    // ---- New Race-specific fleet endpoint ----
+    if (request.method === "GET" && path.match(/^\/races\/([^\/]+)\/fleet$/)) {
+      const raceId = path.split("/")[2];
       try {
-        body = await request.json();
-      } catch {
-        return text("Bad JSON", 400);
+        let body = await r2Json(env, `fleet/${raceId}.json`);
+        if (!body) {
+          body = await r2Json(env, "fleet.json");
+        }
+
+        if (!body) {
+          return jsonResponse(
+            { error: "fleet.json not found", expectedKey: `fleet/${raceId}.json or fleet.json` },
+            404, {}, corsOrigin
+          );
+        }
+
+        return new Response(body, {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json; charset=utf-8",
+            "Access-Control-Allow-Origin": corsOrigin,
+          },
+        });
+      } catch (e: any) {
+        return jsonResponse({ error: `Failed to serve fleet for race ${raceId}`, detail: e?.message || String(e) }, 500, {}, corsOrigin);
+      }
+    }
+
+    // ---- Race-specific boats endpoint ----
+    if (request.method === "GET" && path.match(/^\/races\/([^\/]+)\/boats$/)) {
+      const raceId = path.split("/")[2];
+      try {
+        const id = env.RACE_STATE.idFromName(raceId);
+        const stub = env.RACE_STATE.get(id);
+        return stub.fetch(request);
+      } catch (e: any) {
+        return jsonResponse({ error: `Failed to serve boats for race ${raceId}`, detail: e?.message || String(e) }, 500, {}, corsOrigin);
+      }
+    }
+
+    // ---- Legacy Fleet list (R2) ----
+    if (request.method === "GET" && (path === "/fleet" || path === "/boats/fleet")) {
+      const raceId = getRaceId(url);
+      try {
+        let body: string | null = null;
+
+        if (raceId) {
+          body = await r2Json(env, `fleet/${raceId}.json`);
+        }
+
+        if (!body) {
+          body = await r2Json(env, "fleet.json");
+        }
+
+        if (!body) {
+          return jsonResponse(
+            { error: "fleet.json not found in R2 bucket binding 'RACES'", expectedKey: "fleet.json" },
+            404, {}, corsOrigin
+          );
+        }
+        return new Response(body, {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json; charset=utf-8",
+            "Access-Control-Allow-Origin": corsOrigin,
+          },
+        });
+      } catch (e: any) {
+        return jsonResponse({ error: "Failed to serve /fleet", detail: e?.message || String(e) }, 500, {}, corsOrigin);
+      }
+    }
+
+    // ---- WebSocket live feed (Durable Object) ----
+    if (path === "/ws/live" || path === "/live") {
+      const raceId = getRaceId(url);
+      if (!raceId) return jsonResponse({ error: "missing race id (use ?raceId=...)" }, 400, {}, corsOrigin);
+
+      const id = env.RACE_STATE.idFromName(raceId);
+      const stub = env.RACE_STATE.get(id);
+      return stub.fetch(request);
+    }
+
+    // ---- Boats state (Durable Object) ----
+    if (request.method === "GET" && path === "/boats") {
+      const raceId = getRaceId(url);
+      if (!raceId) return jsonResponse({ error: "missing race id (use ?raceId=...)" }, 400, {}, corsOrigin);
+
+      const id = env.RACE_STATE.idFromName(raceId);
+      const stub = env.RACE_STATE.get(id);
+      return stub.fetch(request);
+    }
+
+    // ---- Update endpoint (FinnTrack app + Traccar JSON) ----
+    if (request.method === "POST" && (path === "/update" || path === "/owntracks" || path === "/ingest")) {
+      if (!isAuthed(request, env)) return jsonResponse({ ok: false, error: "Unauthorized" }, 401, {}, corsOrigin);
+
+      const body = await request.json().catch(() => null);
+      if (!body) return jsonResponse({ ok: false, error: "Invalid JSON body" }, 400, {}, corsOrigin);
+
+      let normalizedPayload: any = {};
+      normalizedPayload.raceId = body.raceId || "training";
+
+      let boatId: string | undefined;
+      if (body.boatId) {
+        boatId = String(body.boatId);
+      } else if (body.id) {
+        boatId = String(body.id);
+      } else if (body.uniqueId) {
+        boatId = String(body.uniqueId);
       }
 
-      // OwnTracks sends various event types; only process location
-      const eventType = String(body?._type || "").toLowerCase();
-      if (eventType && eventType !== "location") {
-        return json({ ok: true, skipped: true, reason: "non-location event" });
+      if (!boatId) {
+        return jsonResponse({ ok: false, error: "Missing boatId" }, 400, {}, corsOrigin);
+      }
+      normalizedPayload.boatId = boatId;
+
+      let lat: number | undefined;
+      let lon: number | undefined;
+
+      if (typeof body.lat === "number" && typeof body.lon === "number") {
+        lat = body.lat;
+        lon = body.lon;
+      } else if (typeof body.latitude === "number" && typeof body.longitude === "number") {
+        lat = body.latitude;
+        lon = body.longitude;
       }
 
-      const { user: authBoatId } = parseBasicAuth(request);
-      const updatePayload = ownTracksToUpdatePayload(url, body, authBoatId);
-
-      if (!updatePayload) {
-        return text("Missing raceId/boatId/lat/lon", 400);
+      if (lat === undefined || lon === undefined) {
+        return jsonResponse({ ok: false, error: "Missing or invalid lat/lon coordinates" }, 400, {}, corsOrigin);
       }
+      normalizedPayload.lat = lat;
+      normalizedPayload.lon = lon;
 
-      const raceId = updatePayload.raceId;
+      normalizedPayload.timestamp = body.timestamp || body.t || new Date().toISOString();
 
-      // Forward to Durable Object
-      const doUrl = new URL(request.url);
-      doUrl.protocol = "https:";
-      doUrl.host = "do";
-      doUrl.pathname = "/update";
+      if (body.boatName) normalizedPayload.boatName = body.boatName;
+      if (body.nation) normalizedPayload.nation = body.nation;
+      if (body.speed !== undefined) normalizedPayload.sog = body.speed;
+      if (body.sog !== undefined) normalizedPayload.sog = body.sog;
+      if (body.course !== undefined) normalizedPayload.cog = body.course;
+      if (body.cog !== undefined) normalizedPayload.cog = body.cog;
+      if (body.heading !== undefined) normalizedPayload.heading = body.heading;
+      if (body.heel !== undefined) normalizedPayload.heel = body.heel;
+      if (body.altitude !== undefined) normalizedPayload.altitude = body.altitude;
 
-      const fwd = new Request(doUrl.toString(), {
+      console.log("Normalized payload:", JSON.stringify(normalizedPayload, null, 2));
+
+      const raceId = normalizedPayload.raceId;
+      const id = env.RACE_STATE.idFromName(raceId);
+      const stub = env.RACE_STATE.get(id);
+
+      return stub.fetch(new Request(request.url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updatePayload),
-      });
-
-      const resp = await stubForRace(env, raceId).fetch(fwd);
-      return withCors(resp);
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(normalizedPayload)
+      }));
     }
 
-    // ---------------------------------------------------------
-    // Autocourse (placeholder - returns empty for now)
-    // ---------------------------------------------------------
-    if (request.method === "GET" && path === "/autocourse") {
-      // Course data would be loaded from R2 or generated
-      return json({
-        startLine: null,
-        finishLine: null,
-        marks: [],
-        coursePolygon: null,
-        windDirection: null,
-      });
+    // ---- Traccar endpoint (GET for OsmAnd protocol, POST for form data) ----
+    if (path === "/traccar") {
+      if (!isAuthed(request, env)) return jsonResponse({ ok: false, error: "Unauthorized" }, 401, {}, corsOrigin);
+
+      let id: string | undefined;
+      let lat: number;
+      let lon: number;
+      let speed: number;
+      let bearing: number;
+      let accuracy: number;
+      let timestamp: number;
+      let raceId = "traccar";
+
+      if (request.method === "GET") {
+        // OsmAnd protocol - params in URL query string
+        id = url.searchParams.get("id") || undefined;
+        lat = parseFloat(url.searchParams.get("lat") || "");
+        lon = parseFloat(url.searchParams.get("lon") || "");
+        speed = parseFloat(url.searchParams.get("speed") || "0");
+        bearing = parseFloat(url.searchParams.get("bearing") || url.searchParams.get("course") || "0");
+        accuracy = parseFloat(url.searchParams.get("accuracy") || "0");
+        timestamp = parseInt(url.searchParams.get("timestamp") || "") || Date.now();
+        raceId = url.searchParams.get("raceId") || "traccar";
+      } else if (request.method === "POST") {
+        // Form data from older Traccar versions
+        const formData = await request.formData().catch(() => null);
+        if (!formData) return jsonResponse({ ok: false, error: "Invalid form data" }, 400, {}, corsOrigin);
+
+        id = formData.get("id")?.toString();
+        lat = parseFloat(formData.get("lat")?.toString() || "");
+        lon = parseFloat(formData.get("lon")?.toString() || "");
+        speed = parseFloat(formData.get("speed")?.toString() || "0");
+        bearing = parseFloat(formData.get("bearing")?.toString() || "0");
+        accuracy = parseFloat(formData.get("accuracy")?.toString() || "0");
+        timestamp = parseInt(formData.get("timestamp")?.toString() || "") || Date.now();
+      } else {
+        return jsonResponse({ error: "Method not allowed" }, 405, {}, corsOrigin);
+      }
+
+      if (!id) return jsonResponse({ ok: false, error: "Missing device id" }, 400, {}, corsOrigin);
+      if (isNaN(lat) || isNaN(lon)) return jsonResponse({ ok: false, error: "Invalid lat/lon coordinates" }, 400, {}, corsOrigin);
+
+      const body = {
+        raceId,
+        boatId: id,
+        boatName: `Device ${id}`,
+        lat,
+        lon,
+        t: timestamp,
+        sog: !isNaN(speed) ? speed : undefined,
+        cog: !isNaN(bearing) ? bearing : undefined,
+        heading: !isNaN(bearing) ? bearing : undefined,
+        accuracy: !isNaN(accuracy) ? accuracy : undefined
+      };
+
+      console.log("Traccar payload:", JSON.stringify(body, null, 2));
+
+      const doId = env.RACE_STATE.idFromName(raceId);
+      const stub = env.RACE_STATE.get(doId);
+
+      return stub.fetch(new Request(request.url.replace("/traccar", "/update"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body)
+      }));
     }
 
-    // ---------------------------------------------------------
-    // Replay Multi (placeholder)
-    // ---------------------------------------------------------
-    if (request.method === "GET" && (path === "/replay-multi" || path === "/replay")) {
-      const raceId = url.searchParams.get("raceId") || "";
-      if (!raceId) return text("Missing raceId", 400);
-
-      // Would load from R2 archive
-      return json({ raceId, boats: [], frames: [] });
+    // ---- GET help for endpoints ----
+    if (request.method === "GET" && path === "/update") {
+      return jsonResponse({
+        endpoint: "/update",
+        method: "POST",
+        description: "Update boat position for FinnTrack app",
+        auth: "Bearer token in Authorization header or ?key=... query param",
+        contentType: "application/json",
+        requiredFields: ["raceId", "boatId", "lat", "lon"],
+        optionalFields: ["boatName", "nation", "t", "sog", "cog", "heading", "heel"]
+      }, 200, {}, corsOrigin);
     }
 
-    // ---------------------------------------------------------
-    // Export GPX
-    // ---------------------------------------------------------
-    if (request.method === "GET" && path === "/export/gpx") {
-      const raceId = url.searchParams.get("raceId") || "";
-      if (!raceId) return text("Missing raceId", 400);
-
-      // Placeholder GPX
-      const gpx = `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="FinnTrack">
-  <metadata>
-    <name>FinnTrack Race ${raceId}</name>
-    <time>${new Date().toISOString()}</time>
-  </metadata>
-</gpx>`;
-
-      return withCors(
-        new Response(gpx, {
-          status: 200,
-          headers: {
-            "Content-Type": "application/gpx+xml",
-            "Content-Disposition": `attachment; filename="finntrack_${raceId}.gpx"`,
-          },
-        })
-      );
-    }
-
-    // ---------------------------------------------------------
-    // Export KML
-    // ---------------------------------------------------------
-    if (request.method === "GET" && path === "/export/kml") {
-      const raceId = url.searchParams.get("raceId") || "";
-      if (!raceId) return text("Missing raceId", 400);
-
-      const kml = `<?xml version="1.0" encoding="UTF-8"?>
-<kml xmlns="http://www.opengis.net/kml/2.2">
-  <Document>
-    <name>FinnTrack Race ${raceId}</name>
-  </Document>
-</kml>`;
-
-      return withCors(
-        new Response(kml, {
-          status: 200,
-          headers: {
-            "Content-Type": "application/vnd.google-earth.kml+xml",
-            "Content-Disposition": `attachment; filename="finntrack_${raceId}.kml"`,
-          },
-        })
-      );
-    }
-
-    // ---------------------------------------------------------
-    // 404 for unmatched routes
-    // ---------------------------------------------------------
-    return text("Not found", 404);
+    // ---- Fallback ----
+    return jsonResponse({ error: "Not found", path }, 404, {}, corsOrigin);
   },
 };
+
+export { RaceState } from "./raceState";

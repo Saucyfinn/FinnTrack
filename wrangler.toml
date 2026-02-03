@@ -13,20 +13,32 @@ bindings = [
   { name = "RACE_STATE", class_name = "RaceState" }
 ]
 
-[d1_databases]
-DB = { binding = "DB", database_name = "DB", database_id = "DB" }
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RaceState"]
 
-[kv_namespaces]
-HISTORY = { binding = "HISTORY", id = "HISTORY" }
-HISTORY_PREV = { binding = "HISTORY_PREV", id = "HISTORY_PREV" }
+# KV Namespaces (array format)
+[[kv_namespaces]]
+binding = "HISTORY"
+id = "HISTORY"
 
-[r2_buckets]
-RACES = { binding = "RACES", bucket_name = "RACES" }
+[[kv_namespaces]]
+binding = "HISTORY_PREV"
+id = "HISTORY_PREV"
+
+# R2 Buckets (array format)
+[[r2_buckets]]
+binding = "RACES"
+bucket_name = "RACES"
+
+# D1 Database (array format)
+[[d1_databases]]
+binding = "DB"
+database_name = "DB"
+database_id = "DB"
 
 [vars]
-# Add default runtime vars (can be overridden in Dashboard)
 CORS_ORIGIN = "*"
 DEVICE_API_KEY = ""
 SHARE = ""
 API_KEY = ""
-

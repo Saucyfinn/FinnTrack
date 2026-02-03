@@ -338,7 +338,7 @@ export default {
       let bearing: number;
       let accuracy: number;
       let timestamp: number;
-      let raceId = "traccar";
+      let raceId = "LIVE";
 
       if (request.method === "GET") {
         // OsmAnd protocol - params in URL query string
@@ -349,7 +349,7 @@ export default {
         bearing = parseFloat(url.searchParams.get("bearing") || url.searchParams.get("course") || "0");
         accuracy = parseFloat(url.searchParams.get("accuracy") || "0");
         timestamp = parseInt(url.searchParams.get("timestamp") || "") || Date.now();
-        raceId = url.searchParams.get("raceId") || "traccar";
+        raceId = url.searchParams.get("raceId") || "LIVE";
       } else if (request.method === "POST") {
         // Form data from older Traccar versions
         const formData = await request.formData().catch(() => null);

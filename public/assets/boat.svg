@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+  <!-- Finn Dinghy Icon - Rotated 180° so bow points up (north) -->
+  <g transform="rotate(180 12 12)">
+    <!-- Boat hull -->
+    <path d="M4 16 L12 19 L20 16 L18 14 L6 14 Z"/>
+    <!-- Sail (distinctive Finn sail shape) -->
+    <path d="M12 4 L12 14 L17 14 Z" opacity="0.8"/>
+    <!-- Mast -->
+    <rect x="11.5" y="3" width="1" height="12"/>
+  </g>
+</svg>

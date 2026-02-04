@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>FinnTrack Analytics</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <link href="https://unpkg.com/maplibre-gl@3.2.1/dist/maplibre-gl.css" rel="stylesheet" />
+</head>
+
+<body>
+
+<header>
+    <img src="/assets/logo.svg" id="logo">
+    <nav>
+        <a href="/index.html">Home</a>
+        <a href="/live.html">Live</a>
+        <a href="/replay.html">Replay</a>
+        <a class="active" href="/analytics.html">Analytics</a>
+    </nav>
+</header>
+
+<div id="sidebar">
+    <h2>Analytics</h2>
+
+    <label>Race ID</label>
+    <input id="raceInput" type="text" placeholder="race1" style="width:100%; padding:6px;">
+
+    <label style="margin-top:10px;">Wind Direction (° true)</label>
+    <input id="windInput" type="number" placeholder="Optional" style="width:100%; padding:6px;">
+
+    <button id="loadBtn" style="margin-top:10px; width:100%;">Load Race</button>
+
+    <h3>Boats</h3>
+    <ul id="boatList"></ul>
+
+    <h3>Export</h3>
+    <button id="exportCsvBtn" style="width:100%;">Export CSV</button>
+</div>
+
+<div id="analysis-panel">
+    <h2 id="boatTitle">Select a boat</h2>
+
+    <div id="stats">
+        <div><strong>Distance:</strong> <span id="statDistance">-</span></div>
+        <div><strong>Max Speed:</strong> <span id="statMaxSpeed">-</span></div>
+        <div><strong>Tacks:</strong> <span id="statTacks">-</span></div>
+        <div><strong>Gybes:</strong> <span id="statGybes">-</span></div>
+        <div><strong>Avg VMG:</strong> <span id="statAvgVMG">-</span></div>
+    </div>
+
+    <canvas id="speedChart"></canvas>
+    <canvas id="vmgChart" style="margin-top:40px;"></canvas>
+</div>
+
+<script src="https://unpkg.com/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="/js/api.js"></script>
+<script src="/js/analytics.js"></script>
+</body>
+</html>

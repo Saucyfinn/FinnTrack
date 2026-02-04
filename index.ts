@@ -84,7 +84,7 @@ function stableBoatId(u: BoatUpdate) {
  * - stores latest position per boatId for a raceId
  * - supports /_fleet, /_boats, /_update, /_ws
  */
-export class RaceState {
+export class RaceStateDO {
   state: DurableObjectState;
   env: Env;
 

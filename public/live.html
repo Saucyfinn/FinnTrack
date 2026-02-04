@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FinnTrack - Live</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <style>
+        .page-container {
+            display: flex;
+            height: calc(100vh - 61px);
+        }
+        #sidebar {
+            top: 61px;
+            height: calc(100vh - 61px);
+        }
+        #map {
+            top: 61px;
+            height: calc(100vh - 61px);
+        }
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 0;
+            font-size: 13px;
+        }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+        .status-dot.connected { background: #00a86b; }
+        .status-dot.connecting { background: #f5a623; animation: pulse 1s infinite; }
+        .status-dot.disconnected { background: #e53935; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .toggle-group {
+            margin: 15px 0;
+        }
+        .toggle-group h3 {
+            margin-bottom: 8px;
+            font-size: 13px;
+            color: #666;
+        }
+        .toggle-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 0;
+        }
+        .toggle-item input {
+            accent-color: var(--accent);
+        }
+        .toggle-item label {
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .export-group {
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid var(--border);
+        }
+        .export-group h3 {
+            margin-bottom: 8px;
+            font-size: 13px;
+            color: #666;
+        }
+        #boatList {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+
+<body>
+
+<header>
+    <img src="/assets/logo.svg" id="logo">
+    <nav>
+        <a href="/">Home</a>
+        <a href="/live.html" style="color: var(--primary);">Live</a>
+        <a href="/replay.html">Replay</a>
+        <a href="/analytics.html">Analytics</a>
+    </nav>
+</header>
+
+<div id="sidebar">
+    <h2>Live Tracking</h2>
+
+    <div id="connectionStatus" class="connection-status">
+        <div class="status-dot connecting"></div>
+        <span class="status-text">Connecting...</span>
+    </div>
+
+    <div style="margin: 15px 0;">
+        <label for="raceSelect" style="font-size: 13px; color: #666;">Race:</label>
+        <select id="raceSelect" style="width: 100%; padding: 8px; margin-top: 5px;"></select>
+        <button id="loadRaceBtn" style="width: 100%; margin-top: 8px;">Load Race</button>
+    </div>
+
+    <div style="margin: 15px 0;">
+        <label for="boatSelect" style="font-size: 13px; color: #666;">Follow Boat:</label>
+        <select id="boatSelect" style="width: 100%; padding: 8px; margin-top: 5px;">
+            <option value="">-- All boats --</option>
+        </select>
+        <div style="margin-top: 8px; display: flex; gap: 8px;">
+            <button id="followBoatBtn" style="flex: 1;">Follow</button>
+            <button id="resetViewBtn" style="flex: 1;">Reset View</button>
+        </div>
+    </div>
+
+    <h3>Boats</h3>
+    <ul id="boatList"></ul>
+
+    <div class="toggle-group">
+        <h3>Display</h3>
+        <div class="toggle-item">
+            <input type="checkbox" id="toggleLabels" checked>
+            <label for="toggleLabels">Labels</label>
+        </div>
+        <div class="toggle-item">
+            <input type="checkbox" id="toggleVectors" checked>
+            <label for="toggleVectors">Vectors</label>
+        </div>
+        <div class="toggle-item">
+            <input type="checkbox" id="toggleTrails" checked>
+            <label for="toggleTrails">Trails</label>
+        </div>
+    </div>
+
+    <div class="toggle-group">
+        <h3>Course</h3>
+        <div class="toggle-item">
+            <input type="checkbox" id="toggleStart" checked>
+            <label for="toggleStart">Start Line</label>
+        </div>
+        <div class="toggle-item">
+            <input type="checkbox" id="toggleFinish" checked>
+            <label for="toggleFinish">Finish Line</label>
+        </div>
+        <div class="toggle-item">
+            <input type="checkbox" id="toggleMarks" checked>
+            <label for="toggleMarks">Marks</label>
+        </div>
+        <div class="toggle-item">
+            <input type="checkbox" id="togglePolygon" checked>
+            <label for="togglePolygon">Course Area</label>
+        </div>
+    </div>
+
+    <div class="export-group">
+        <h3>Export</h3>
+        <button id="exportGPX">GPX</button>
+        <button id="exportKML">KML</button>
+        <button id="exportJSON">JSON</button>
+    </div>
+</div>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/js/api.js"></script>
+<script src="/js/map.js"></script>
+<script src="/js/live.js"></script>
+
+</body>
+</html>

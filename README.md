@@ -1,96 +1,175 @@
-# FinnTrack API Worker
+# FinnTrack (Cloudflare Workers + Durable Objects + KV + R2)
 
-Cloudflare Worker API for the FinnTrack sailing race tracking system.
+A live + replay fleet tracker designed for 100–200 boats.
 
-## Endpoints
+## What you get
+- Live WebSocket feed (`/live?raceId=...`)
+- Replay (`/replay-multi?raceId=...`)
+- Auto course detection (`/autocourse?raceId=...`)
+- GPX/KML export (`/export/gpx`, `/export/kml`)
+- R2 archives (`/archive/save`, `/archive/load`)
+- Static web UI served from Workers Static Assets (`/finntrack.html`)
 
-- `GET /` - API health and endpoint list
-- `GET /races` - List of active races
-- `GET /boats?raceId=...` - Get boats for a specific race
-- `GET /ws/live?raceId=...` - WebSocket live feed
-- `POST /join` - Join a race roster
-- `POST /update` - Update boat position (FinnTrack app)
-- `POST /traccar` - Accept Traccar Client position updates
+## Install / Run / Deploy
 
-## Authentication
-
-- **FinnTrack app**: Bearer token in Authorization header
-- **Traccar clients**: Query parameter `?key=...`
-- **Supported tokens**: `DEVICE_API_KEY`, `SHARE` environment variables
-
-## Testing Commands
-
-### Basic Health Check
+### 1) Install deps
 ```bash
-curl https://api.finntracker.org/
+npm install
 ```
 
-### FinnTrack App Update
+### 2) Login
 ```bash
-curl -X POST https://api.finntracker.org/update \
-  -H "Authorization: Bearer YOUR_TOKEN" \
+npx wrangler login
+```
+
+### 3) Create KV namespaces (prod + preview)
+```bash
+npx wrangler kv namespace create HISTORY
+npx wrangler kv namespace create HISTORY --preview
+```
+
+Copy the IDs into `wrangler.jsonc`:
+- `kv_namespaces[0].id`
+- `kv_namespaces[0].preview_id`
+
+### 4) Create the R2 bucket
+```bash
+npx wrangler r2 bucket create finntrack-races
+```
+
+### 5) Build
+```bash
+npm run build
+```
+
+### 6) Run locally
+```bash
+npm run dev
+```
+
+Open:
+- http://localhost:8787/finntrack.html
+
+### 7) Deploy
+```bash
+npm run deploy
+```
+
+## POST telemetry (from RaceQuantifier or device)
+```http
+POST /update
+Content-Type: application/json
+```
+
+```json
+{
+  "raceId": "RACE1",
+  "boatId": "NZL21",
+  "lat": -43.612345,
+  "lng": 172.781234,
+  "speed": 4.8,
+  "heading": 212,
+  "timestamp": 1737612890
+}
+```
+
+The backend also accepts alternate field names for device compatibility:
+- `lon` (alias for `lng`)
+- `sog` (alias for `speed` - speed over ground)
+- `cog` (alias for `heading` - course over ground)
+- `ts` (alias for `timestamp`)
+
+---
+
+## Test Plan
+
+### Base URL (Production)
+```
+https://finntrack-api.hvrdfbj65m.workers.dev
+```
+
+### 1) Test Race List Endpoint
+```bash
+curl -s https://finntrack-api.hvrdfbj65m.workers.dev/race/list | head -c 500
+```
+Expected: JSON with `{"races":[...]}` containing race objects with `raceId`, `title`, `series`, etc.
+
+### 2) Test Update Endpoint
+```bash
+curl -X POST https://finntrack-api.hvrdfbj65m.workers.dev/update \
   -H "Content-Type: application/json" \
   -d '{
-    "raceId": "test2025",
-    "boatId": "boat123",
-    "boatName": "Test Boat",
-    "lat": -36.8485,
-    "lon": 174.7633,
-    "sog": 5.2,
-    "cog": 180
+    "raceId": "AUSNATS-2026-R01",
+    "boatId": "TEST-001",
+    "lat": -27.458,
+    "lon": 153.185,
+    "sog": 5.5,
+    "cog": 180,
+    "ts": '"$(date +%s)"'
   }'
 ```
+Expected: `OK`
 
-### Traccar Client Update
+### 3) Test WebSocket Connection
 ```bash
-curl -X POST "https://api.finntracker.org/traccar?key=YOUR_TOKEN" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "id=device001&lat=-36.8485&lon=174.7633&speed=5.2&bearing=180&accuracy=10&timestamp=$(date +%s)000"
+# Using websocat (install: brew install websocat)
+websocat "wss://finntrack-api.hvrdfbj65m.workers.dev/live?raceId=AUSNATS-2026-R01"
 ```
+Expected: Receives JSON message `{"type":"full","boats":{...}}` on connect.
 
-### Get Boats for Race
+### 4) Open Viewer Page
+```
+https://finntrack-api.hvrdfbj65m.workers.dev/
+```
+- Verify map loads centered on Moreton Bay
+- Verify race dropdown populates with races
+- Select a race and click "Load" - should connect WebSocket
+- Verify "Join from this device" link is visible
+
+### 5) Open Join Page
+```
+https://finntrack-api.hvrdfbj65m.workers.dev/join.html
+```
+- Verify race dropdown populates
+- Enter a Boat ID (e.g., "TEST-001")
+- Click "Start Tracking"
+- Allow GPS permission when prompted
+- Verify status shows "GPS: Active" and "Tracking: Active"
+- Verify "Updates Sent" counter increments every 2 seconds
+
+### 6) Verify Live Updates
+1. Open viewer in one browser tab, select a race, click Load
+2. Open join page in another tab (or on mobile), join same race
+3. Start tracking on join page
+4. Verify boat marker appears on viewer map in real-time
+
+### 7) Test CORS (from external origin)
 ```bash
-curl "https://api.finntracker.org/boats?raceId=test2025"
-curl "https://api.finntracker.org/boats?raceId=traccar"
+curl -I -X OPTIONS https://finntrack-api.hvrdfbj65m.workers.dev/update \
+  -H "Origin: https://example.com" \
+  -H "Access-Control-Request-Method: POST"
 ```
+Expected: `Access-Control-Allow-Origin: *` header present.
 
-### Get Help for Endpoints
-```bash
-curl https://api.finntracker.org/update
-curl https://api.finntracker.org/traccar
-```
+---
 
-## Local Development
+## URLs Summary
 
-```bash
-# Install dependencies
-npm install
+| Page | URL |
+|------|-----|
+| Live Viewer | https://finntrack-api.hvrdfbj65m.workers.dev/ |
+| Device Join | https://finntrack-api.hvrdfbj65m.workers.dev/join.html |
 
-# Start local dev server
-npx wrangler dev
+## API Endpoints
 
-# Test locally
-curl http://localhost:8787/
-curl -X POST "http://localhost:8787/traccar?key=finn123" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "id=dev001&lat=-36.8485&lon=174.7633"
-```
-
-## Deployment
-
-```bash
-# Deploy to Cloudflare
-npx wrangler deploy
-
-# Set secrets (if needed)
-npx wrangler secret put DEVICE_API_KEY
-npx wrangler secret put SHARE
-```
-
-## Configuration
-
-The worker is configured to handle:
-- Route: `api.finntracker.org/*`
-- Default API key: `finn123` (dev mode)
-- Traccar devices automatically use race ID "traccar"
-- All data stored in Durable Objects with real-time WebSocket updates
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/race/list` | GET | List available races |
+| `/update` | POST | Send boat position update |
+| `/live?raceId=X` | WS | WebSocket live feed |
+| `/boats?raceId=X` | GET | Current boat positions |
+| `/replay-multi?raceId=X` | GET | Replay data for all boats |
+| `/autocourse?raceId=X` | GET | Auto-detected course features |
+| `/export/gpx?raceId=X` | GET | Export as GPX |
+| `/export/kml?raceId=X` | GET | Export as KML |
+# FinnTrack

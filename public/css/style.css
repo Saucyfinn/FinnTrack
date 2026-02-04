@@ -1,0 +1,196 @@
+/* ---------- LIGHT THEME ---------- */
+
+:root {
+    --bg: #f5f5f5;
+    --sidebar-bg: #ffffff;
+    --text: #222;
+    --primary: #0077cc;
+    --border: #ddd;
+    --accent: #0099ff;
+}
+
+body, html {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+}
+
+/* ---------- HEADER ---------- */
+
+header {
+    background: white;
+    border-bottom: 1px solid var(--border);
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+#logo {
+    height: 40px;
+}
+
+header nav a {
+    margin-left: 20px;
+    text-decoration: none;
+    color: var(--text);
+    font-weight: 600;
+}
+
+header nav a:hover {
+    color: var(--primary);
+}
+
+/* ---------- LANDING PAGE ---------- */
+
+main.center {
+    text-align: center;
+    margin-top: 60px;
+}
+
+.home-buttons {
+    display: flex;
+    justify-content: center;
+    margin-top: 40px;
+    gap: 20px;
+}
+
+.btn {
+    display: inline-block;
+    padding: 15px 30px;
+    font-size: 18px;
+    background: var(--primary);
+    color: white;
+    text-decoration: none;
+    border-radius: 6px;
+    box-shadow: 0 3px 6px rgba(0,0,0,0.1);
+}
+
+.btn:hover {
+    background: var(--accent);
+}
+
+/* ---------- SIDEBAR (LIVE + REPLAY + ANALYTICS) ---------- */
+
+#sidebar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 260px;
+    background: var(--sidebar-bg);
+    border-right: 1px solid var(--border);
+    padding: 15px;
+    overflow-y: auto;
+}
+
+#sidebar h2, #sidebar h3 {
+    margin-top: 10px;
+    color: var(--text);
+}
+
+#boatList li {
+    padding: 8px 5px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    color: var(--text);
+}
+
+#boatList li:hover {
+    background: #eee;
+}
+
+/* ---------- MAP AREA ---------- */
+
+#map {
+    position: absolute;
+    top: 0;
+    left: 260px;
+    right: 0;
+    bottom: 0;
+}
+
+/* ---------- CONTROLS ---------- */
+
+button {
+    background: white;
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    margin: 3px;
+    cursor: pointer;
+    border-radius: 5px;
+    color: var(--text);
+}
+
+button:hover {
+    background: var(--accent);
+    color: white;
+}
+
+#timeline {
+    width: 100%;
+    accent-color: var(--accent);
+}
+
+footer {
+    position: fixed;
+    bottom: 10px;
+    width: 100%;
+    text-align: center;
+    color: #777;
+    font-size: 14px;
+}
+
+/* ---------- ANALYTICS PAGE ---------- */
+
+#analysis-panel {
+    position: absolute;
+    top: 60px;  /* header height */
+    left: 260px;
+    right: 0;
+    bottom: 0;
+    padding: 20px;
+    overflow-y: auto;
+    background: var(--bg);
+}
+
+#stats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    margin-bottom: 30px;
+}
+
+#stats div {
+    background: white;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+
+canvas {
+    background: white;
+    padding: 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+}
+
+header nav a.active {
+    color: var(--primary);
+}
+
+#boatList {
+    list-style: none;
+    padding: 0;
+    margin: 10px 0;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+#boatList li.selected {
+    background: var(--primary);
+    color: white;
+}

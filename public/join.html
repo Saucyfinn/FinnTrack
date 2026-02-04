@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>FinnTrack – Join Race</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: #f5f5f5;
+      min-height: 100vh;
+    }
+    .container {
+      max-width: 400px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1 {
+      margin: 0 0 20px 0;
+      font-size: 24px;
+      text-align: center;
+    }
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: 500;
+    }
+    input, select {
+      width: 100%;
+      padding: 12px;
+      margin-bottom: 16px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      font-size: 16px;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: #007aff;
+    }
+    .btn {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 10px;
+    }
+    .btn-start {
+      background: #34c759;
+      color: #fff;
+    }
+    .btn-start:disabled {
+      background: #a8a8a8;
+    }
+    .btn-stop {
+      background: #ff3b30;
+      color: #fff;
+      display: none;
+    }
+    .status {
+      background: #f0f0f0;
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 20px;
+    }
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .status-row:last-child { margin-bottom: 0; }
+    .status-label { color: #666; }
+    .status-value { font-weight: 600; }
+    .status-ok { color: #34c759; }
+    .status-error { color: #ff3b30; }
+    .status-pending { color: #ff9500; }
+    .error-msg {
+      background: #ffebee;
+      color: #c62828;
+      padding: 12px;
+      border-radius: 8px;
+      margin-top: 16px;
+      display: none;
+    }
+    .back-link {
+      display: block;
+      text-align: center;
+      margin-top: 20px;
+      color: #007aff;
+      text-decoration: none;
+    }
+    .coordinates {
+      font-family: monospace;
+      font-size: 12px;
+      color: #666;
+      text-align: center;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Join Race</h1>
+
+    <label for="raceSelect">Race</label>
+    <select id="raceSelect">
+      <option value="">Loading races...</option>
+    </select>
+
+    <label for="entrySelect">Select Your Entry</label>
+    <select id="entrySelect">
+      <option value="">-- Select from fleet or enter manually --</option>
+    </select>
+
+    <label for="boatId">Boat ID / Sail Number</label>
+    <input type="text" id="boatId" placeholder="e.g. AUS 123" required>
+
+    <label for="boatName">Skipper Name</label>
+    <input type="text" id="boatName" placeholder="e.g. John Smith">
+
+    <button class="btn btn-start" id="startBtn">Start Tracking</button>
+    <button class="btn btn-stop" id="stopBtn">Stop Tracking</button>
+
+    <div class="error-msg" id="errorMsg"></div>
+
+    <div class="status">
+      <div class="status-row">
+        <span class="status-label">GPS Permission</span>
+        <span class="status-value" id="gpsStatus">Not requested</span>
+      </div>
+      <div class="status-row">
+        <span class="status-label">Tracking</span>
+        <span class="status-value" id="trackingStatus">Stopped</span>
+      </div>
+      <div class="status-row">
+        <span class="status-label">Updates Sent</span>
+        <span class="status-value" id="updateCount">0</span>
+      </div>
+      <div class="status-row">
+        <span class="status-label">Last Sent</span>
+        <span class="status-value" id="lastSent">—</span>
+      </div>
+    </div>
+
+    <div class="coordinates" id="coordinates">—</div>
+
+    <a href="/" class="back-link">← Back to Live Viewer</a>
+  </div>
+
+  <script>
+    (() => {
+      const API_BASE = "";
+
+      // Elements
+      const raceSelect = document.getElementById("raceSelect");
+      const entrySelect = document.getElementById("entrySelect");
+      const boatIdInput = document.getElementById("boatId");
+      const boatNameInput = document.getElementById("boatName");
+      const startBtn = document.getElementById("startBtn");
+      const stopBtn = document.getElementById("stopBtn");
+      const errorMsg = document.getElementById("errorMsg");
+      const gpsStatus = document.getElementById("gpsStatus");
+      const trackingStatus = document.getElementById("trackingStatus");
+      const updateCount = document.getElementById("updateCount");
+      const lastSent = document.getElementById("lastSent");
+      const coordinates = document.getElementById("coordinates");
+
+      // State
+      let watchId = null;
+      let sendCount = 0;
+      let lastSendTime = 0;
+      let lastPosition = null;
+      let sendInterval = null;
+
+      const SEND_INTERVAL_MS = 2000; // Send every 2 seconds
+
+      // Fetch and populate fleet entries
+      async function loadFleetEntries() {
+        try {
+          const res = await fetch("/data/fleet.json");
+          if (!res.ok) throw new Error("Failed to load fleet");
+          const data = await res.json();
+          const entries = data.entries || [];
+
+          entrySelect.innerHTML = '<option value="">-- Select from fleet or enter manually --</option>';
+
+          entries.forEach((entry, idx) => {
+            const opt = document.createElement("option");
+            opt.value = idx;
+            opt.textContent = `${entry.sailNumber} - ${entry.skipper}`;
+            opt.dataset.sailNumber = entry.sailNumber;
+            opt.dataset.skipper = entry.skipper;
+            entrySelect.appendChild(opt);
+          });
+
+          // Store entries for selection
+          entrySelect.fleetData = entries;
+        } catch (err) {
+          console.log("Fleet data not available, using manual entry only");
+        }
+      }
+
+      // Handle entry selection
+      entrySelect.addEventListener("change", () => {
+        const idx = entrySelect.value;
+        if (idx !== "" && entrySelect.fleetData) {
+          const entry = entrySelect.fleetData[idx];
+          boatIdInput.value = entry.sailNumber;
+          boatNameInput.value = entry.skipper;
+          // Save to localStorage
+          localStorage.setItem("finntrack_boatId", entry.sailNumber);
+          localStorage.setItem("finntrack_boatName", entry.skipper);
+        }
+      });
+
+      // Fetch and populate races
+      async function loadRaces() {
+        try {
+          const res = await fetch(API_BASE + "/race/list");
+          if (!res.ok) throw new Error("Failed to load races");
+          const data = await res.json();
+          const races = data.races || [];
+
+          raceSelect.innerHTML = "";
+
+          if (races.length === 0) {
+            raceSelect.innerHTML = '<option value="">No races available</option>';
+            return;
+          }
+
+          // Sort by series then race number
+          races.sort((a, b) => {
+            const sa = (a.series || "").localeCompare(b.series || "");
+            if (sa !== 0) return sa;
+            return (a.raceNo || 0) - (b.raceNo || 0);
+          });
+
+          for (const r of races) {
+            const opt = document.createElement("option");
+            opt.value = r.raceId;
+            opt.textContent = r.title || r.raceId;
+            raceSelect.appendChild(opt);
+          }
+        } catch (err) {
+          showError("Failed to load race list: " + err.message);
+          raceSelect.innerHTML = '<option value="">Error loading races</option>';
+        }
+      }
+
+      function showError(msg) {
+        errorMsg.textContent = msg;
+        errorMsg.style.display = "block";
+      }
+
+      function hideError() {
+        errorMsg.style.display = "none";
+      }
+
+      function setGpsStatus(status, type) {
+        gpsStatus.textContent = status;
+        gpsStatus.className = "status-value status-" + type;
+      }
+
+      function setTrackingStatus(status, type) {
+        trackingStatus.textContent = status;
+        trackingStatus.className = "status-value status-" + type;
+      }
+
+      // Send position update to server
+      async function sendUpdate() {
+        if (!lastPosition) return;
+
+        const now = Date.now();
+        if (now - lastSendTime < SEND_INTERVAL_MS) return;
+
+        const raceId = raceSelect.value;
+        const boatId = boatIdInput.value.trim();
+
+        if (!raceId || !boatId) return;
+
+        const payload = {
+          raceId: raceId,
+          boatId: boatId,
+          name: boatNameInput.value.trim() || undefined,
+          lat: lastPosition.coords.latitude,
+          lon: lastPosition.coords.longitude,
+          sog: lastPosition.coords.speed != null ? lastPosition.coords.speed * 1.94384 : undefined, // m/s to knots
+          cog: lastPosition.coords.heading != null ? lastPosition.coords.heading : undefined,
+          ts: Math.floor(now / 1000)
+        };
+
+        try {
+          const res = await fetch(API_BASE + "/update", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+
+          if (res.ok) {
+            sendCount++;
+            lastSendTime = now;
+            updateCount.textContent = sendCount;
+            lastSent.textContent = new Date().toLocaleTimeString();
+            hideError();
+          } else {
+            showError("Server error: " + res.status);
+          }
+        } catch (err) {
+          showError("Network error: " + err.message);
+        }
+      }
+
+      // Handle position update from GPS
+      function onPosition(position) {
+        lastPosition = position;
+
+        const lat = position.coords.latitude.toFixed(6);
+        const lng = position.coords.longitude.toFixed(6);
+        const accuracy = position.coords.accuracy.toFixed(0);
+        const speed = position.coords.speed != null
+          ? (position.coords.speed * 1.94384).toFixed(1) + " kn"
+          : "—";
+
+        coordinates.textContent = `${lat}, ${lng} (±${accuracy}m) | ${speed}`;
+
+        setGpsStatus("Active", "ok");
+      }
+
+      // Handle GPS error
+      function onPositionError(error) {
+        let msg = "Unknown error";
+        switch (error.code) {
+          case error.PERMISSION_DENIED:
+            msg = "Permission denied. Please allow location access in your browser settings.";
+            setGpsStatus("Denied", "error");
+            break;
+          case error.POSITION_UNAVAILABLE:
+            msg = "Position unavailable. Make sure GPS is enabled.";
+            setGpsStatus("Unavailable", "error");
+            break;
+          case error.TIMEOUT:
+            msg = "GPS timeout. Trying again...";
+            setGpsStatus("Timeout", "pending");
+            return; // Don't stop on timeout
+        }
+        showError(msg);
+        stopTracking();
+      }
+
+      // Start tracking
+      function startTracking() {
+        hideError();
+
+        const raceId = raceSelect.value;
+        const boatId = boatIdInput.value.trim();
+
+        if (!raceId) {
+          showError("Please select a race");
+          return;
+        }
+
+        if (!boatId) {
+          showError("Please enter your Boat ID / Sail Number");
+          return;
+        }
+
+        if (!navigator.geolocation) {
+          showError("Geolocation is not supported by this browser");
+          return;
+        }
+
+        setGpsStatus("Requesting...", "pending");
+        setTrackingStatus("Starting...", "pending");
+
+        // Start watching position
+        watchId = navigator.geolocation.watchPosition(
+          onPosition,
+          onPositionError,
+          {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 0
+          }
+        );
+
+        // Start send interval
+        sendInterval = setInterval(sendUpdate, SEND_INTERVAL_MS);
+
+        // UI updates
+        startBtn.style.display = "none";
+        stopBtn.style.display = "block";
+        raceSelect.disabled = true;
+        boatIdInput.disabled = true;
+        boatNameInput.disabled = true;
+
+        setTrackingStatus("Active", "ok");
+      }
+
+      // Stop tracking
+      function stopTracking() {
+        if (watchId !== null) {
+          navigator.geolocation.clearWatch(watchId);
+          watchId = null;
+        }
+
+        if (sendInterval !== null) {
+          clearInterval(sendInterval);
+          sendInterval = null;
+        }
+
+        // UI updates
+        startBtn.style.display = "block";
+        stopBtn.style.display = "none";
+        raceSelect.disabled = false;
+        boatIdInput.disabled = false;
+        boatNameInput.disabled = false;
+
+        setTrackingStatus("Stopped", "pending");
+        setGpsStatus("Not active", "pending");
+      }
+
+      // Event listeners (user gesture required for iOS Safari)
+      startBtn.addEventListener("click", startTracking);
+      stopBtn.addEventListener("click", stopTracking);
+
+      // Handle page visibility changes (pause when hidden to save battery)
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden && watchId !== null) {
+          // Page hidden - could pause tracking here if needed
+          console.log("[FinnTrack] Page hidden, continuing tracking");
+        }
+      });
+
+      // Handle page unload
+      window.addEventListener("beforeunload", (e) => {
+        if (watchId !== null) {
+          e.preventDefault();
+          e.returnValue = "Tracking is active. Are you sure you want to leave?";
+        }
+      });
+
+      // Load saved boat ID from localStorage
+      const savedBoatId = localStorage.getItem("finntrack_boatId");
+      const savedBoatName = localStorage.getItem("finntrack_boatName");
+      if (savedBoatId) boatIdInput.value = savedBoatId;
+      if (savedBoatName) boatNameInput.value = savedBoatName;
+
+      // Save boat ID on change
+      boatIdInput.addEventListener("change", () => {
+        localStorage.setItem("finntrack_boatId", boatIdInput.value);
+      });
+      boatNameInput.addEventListener("change", () => {
+        localStorage.setItem("finntrack_boatName", boatNameInput.value);
+      });
+
+      // Initialize
+      loadFleetEntries();
+      loadRaces();
+    })();
+  </script>
+</body>
+</html>

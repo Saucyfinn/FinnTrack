@@ -165,8 +165,3 @@ dist
 .env*
 !.env.example
 .wrangler/
-
-# Backup files
-*.bak.*
-*.bad.*
-wrangler.toml
